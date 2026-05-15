@@ -1,4 +1,6 @@
 import CalculatorApp from "./CalculatorApp"
+import { signOut } from "firebase/auth"
+import { auth } from "../firebase"
 import {
   StickyNote,
   Calculator,
@@ -112,6 +114,7 @@ const [isFilesMinimized, setIsFilesMinimized] = useState(false)
         isNotesOpen={isNotesOpen}
         isCalculatorOpen={isCalculatorOpen}
         isFilesOpen={isFilesOpen}
+        logout={() => signOut(auth)}
 
         openNotes={() => {
           setIsNotesOpen(true)

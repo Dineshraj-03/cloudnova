@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 
 function Taskbar({
+  logout,
   isFilesOpen,
   openFiles,
   isNotesOpen,
@@ -82,7 +83,7 @@ function Taskbar({
 
       </div>
     )}
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-1 justify-center">
 
   {isNotesOpen && (
     <button
@@ -113,9 +114,20 @@ function Taskbar({
 
 </div>
 
+    <div className="flex items-center gap-4">
+
+      <button
+        onClick={logout}
+        className="bg-red-500 hover:bg-red-600 transition px-3 py-1 rounded-lg text-white"
+      >
+        Logout
+      </button>
+
       <div className="text-white font-medium">
         {time}
       </div>
+
+    </div>
 
     </div>
   )
