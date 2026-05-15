@@ -1,6 +1,22 @@
+import { useEffect, useState } from "react"
 import Window from "./Window"
 
 function Notes(props) {
+
+  const [note, setNote] = useState("")
+
+  useEffect(() => {
+    const savedNote = localStorage.getItem("cloudnova-note")
+
+    if (savedNote) {
+      setNote(savedNote)
+    }
+  }, [])
+
+  useEffect(() => {
+    localStorage.setItem("cloudnova-note", note)
+  }, [note])
+
   return (
     <Window
       title="Notes"
@@ -17,6 +33,8 @@ function Notes(props) {
     >
 
       <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
         placeholder="Write something..."
         className="w-full h-full bg-zinc-800 text-white p-4 outline-none resize-none"
       />
