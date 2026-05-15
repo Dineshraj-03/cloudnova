@@ -12,7 +12,7 @@ import Notes from "./Notes"
 import FileExplorer from "./FileExplorer"
 import Terminal from "./Terminal"
 
-function Desktop() {
+function Desktop({ shutdownSystem }) {
 
   const [isNotesOpen, setIsNotesOpen] = useState(false)
   const [isCalculatorOpen, setIsCalculatorOpen] = useState(false)
@@ -83,7 +83,19 @@ const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
               }
 
             }}
-            className="w-20 flex flex-col items-center text-white cursor-pointer"
+            className="
+            w-20
+            flex
+            flex-col
+            items-center
+            text-white
+            cursor-pointer
+            transition-all
+            duration-200
+            hover:scale-110
+            hover:-translate-y-1
+            hover:text-blue-400
+            "
           >
 
             <div className="text-4xl">
@@ -130,6 +142,24 @@ const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
           minimizeTerminal={() => setIsTerminalMinimized(true)}
           isActive={activeWindow === "terminal"}
           focusWindow={() => setActiveWindow("terminal")}
+          shutdownSystem={shutdownSystem}
+          openNotes={() => {
+            setIsNotesOpen(true)
+            setIsNotesMinimized(false)
+            setActiveWindow("notes")
+          }}
+
+          openCalculator={() => {
+            setIsCalculatorOpen(true)
+            setIsCalculatorMinimized(false)
+            setActiveWindow("calculator")
+          }}
+
+          openFiles={() => {
+            setIsFilesOpen(true)
+            setIsFilesMinimized(false)
+            setActiveWindow("files")
+          }}
         />
       )}
 

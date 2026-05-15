@@ -22,17 +22,31 @@ function Window({
   }
 
   return (
-    <div
-      onMouseDown={focusWindow}
-      className="absolute bg-zinc-800 rounded-xl shadow-2xl border border-zinc-700 overflow-hidden"
-      style={{
-        left: position.x,
-        top: position.y,
-        width,
-        height,
-        zIndex: isActive ? 20 : 10,
-      }}
-    >
+<div
+  onMouseDown={focusWindow}
+  className={`
+absolute
+bg-zinc-800
+rounded-xl
+shadow-2xl
+overflow-hidden
+transition-all
+duration-200
+ease-out
+animate-[popIn_0.2s_ease-out]
+${isActive
+  ? "border border-blue-500 shadow-blue-500/20"
+  : "border border-zinc-700 opacity-95"
+}
+`}
+  style={{
+    left: position.x,
+    top: position.y,
+    width,
+    height,
+    zIndex: isActive ? 20 : 10,
+  }}
+>
 
       <div
         onMouseMove={(e) => {

@@ -14,6 +14,8 @@ function Notes(props) {
 
   const [note, setNote] = useState("")
 
+  const [saveTimeout, setSaveTimeout] = useState(null)
+
   useEffect(() => {
 
     const loadNote = async () => {
@@ -40,16 +42,28 @@ function Notes(props) {
 
     setNote(value)
 
-    const user = auth.currentUser
+    if (saveTimeout) {
+      clearTimeout(saveTimeout)
+    }
 
-    if (!user) return
+    const timeout = setTimeout(async () => {
 
-    await setDoc(
-      doc(db, "notes", user.uid),
-      {
-        content: value,
-      }
-    )
+      const user = auth.currentUser
+
+      if (!user) return
+
+      await setDoc(
+        doc(db, "notes", user.uid),
+        {
+          content: value,
+        }
+      )
+
+      console.log("Note saved.")
+
+    }, 800)
+
+    setSaveTimeout(timeout)
   }
 
   return (

@@ -9,64 +9,69 @@ function Terminal(props) {
     "Type 'help' to see commands.",
   ])
 
-  const commands = {
-    help: [
-      "Available commands:",
-      "help",
-      "about",
-      "clear",
-      "date",
-      "whoami",
-    ],
+const runCommand = () => {
 
-    about: [
-      "CloudNova OS Simulation",
-      "Built with React + Firebase",
-    ],
+  const command = input.trim().toLowerCase()
 
-    whoami: [
-      "cloudnova-user",
-    ],
+  let output = []
 
-    date: [
-      new Date().toString(),
-    ],
-  }
+  if (command === "open notes") {
 
-  const runCommand = () => {
+    props.openNotes()
 
-    const command = input.trim()
+    output = ["Opening Notes..."]
 
-    let output = []
+  } else if (command === "open calculator") {
 
-    if (command === "clear") {
+    props.openCalculator()
 
-      setHistory([])
+    output = ["Opening Calculator..."]
 
-      setInput("")
+  } else if (command === "open files") {
 
-      return
+    props.openFiles()
 
-    } else if (commands[command]) {
+    output = ["Opening Files..."]
 
-      output = commands[command]
+  } else if (command === "clear") {
 
-    } else {
-
-      output = [
-        `'${command}' is not recognized.`,
-      ]
-
-    }
-
-    setHistory([
-      ...history,
-      `> ${command}`,
-      ...output,
-    ])
+    setHistory([])
 
     setInput("")
+
+    return
+
+  } else if (command === "shutdown") {
+
+      output = ["Shutting down CloudNova..."]
+
+      setTimeout(() => {
+
+        props.shutdownSystem()
+
+      }, 1500)
+
+    }
+  else if (commands[command]) {
+
+    output = commands[command]
+
+  } else {
+
+    output = [
+      `'${command}' is not recognized.`,
+    ]
+
   }
+
+  setHistory([
+    ...history,
+    `> ${command}`,
+    ...output,
+  ])
+
+  setInput("")
+}
 
   return (
     <Window
