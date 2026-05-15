@@ -4,13 +4,16 @@ import { auth } from "../firebase"
 import {
   StickyNote,
   Calculator,
-  Folder,
+  FolderOpen,
+  Globe2,
+  TerminalSquare,
 } from "lucide-react"
 import { useState } from "react"
 import Taskbar from "./Taskbar"
 import Notes from "./Notes"
 import FileExplorer from "./FileExplorer"
 import Terminal from "./Terminal"
+import Browser from "./Browser"
 
 function Desktop({ shutdownSystem }) {
 
@@ -27,26 +30,37 @@ function Desktop({ shutdownSystem }) {
 
   const [isTerminalOpen, setIsTerminalOpen] = useState(false)
 
-const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
+  const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
+  const [isBrowserOpen, setIsBrowserOpen] = useState(false)
+
+  const [isBrowserMinimized, setIsBrowserMinimized] = useState(false)
 
   const apps = [
-    {
-      name: "Notes",
-      icon: <StickyNote size={40} />,
-    },
-    {
-      name: "Calculator",
-      icon: <Calculator size={40} />,
-    },
-    {
-      name: "Files",
-      icon: <Folder size={40} />,
-    },
-    {
-      name: "Terminal",
-      icon: "💻",
-    },
-  ]
+  {
+    name: "Notes",
+    icon: <StickyNote size={46} strokeWidth={1.5} />,
+  },
+
+  {
+    name: "Calculator",
+    icon: <Calculator size={46} strokeWidth={1.5} />,
+  },
+
+  {
+    name: "Files",
+    icon: <FolderOpen size={46} strokeWidth={1.5} />,
+  },
+
+  {
+    name: "Terminal",
+    icon: <TerminalSquare size={46} strokeWidth={1.5} />,
+  },
+
+  {
+    name: "Browser",
+    icon: <Globe2 size={46} strokeWidth={1.5} />,
+  },
+]
 
   return (
     <div className="h-screen bg-zinc-900 relative overflow-hidden">
@@ -80,6 +94,15 @@ const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
                 setIsTerminalOpen(true)
                 setIsTerminalMinimized(false)
                 setActiveWindow("terminal")
+              }
+              if (app.name === "Browser") {
+
+                setIsBrowserOpen(true)
+
+                setIsBrowserMinimized(false)
+
+                setActiveWindow("browser")
+
               }
 
             }}
@@ -162,6 +185,16 @@ const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
           }}
         />
       )}
+      {isBrowserOpen && !isBrowserMinimized && (
+
+        <Browser
+          closeBrowser={() => setIsBrowserOpen(false)}
+          minimizeBrowser={() => setIsBrowserMinimized(true)}
+          isActive={activeWindow === "browser"}
+          focusWindow={() => setActiveWindow("browser")}
+        />
+
+      )}
 
       <Taskbar
         isNotesOpen={isNotesOpen}
@@ -169,6 +202,7 @@ const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
         isFilesOpen={isFilesOpen}
         logout={() => signOut(auth)}
         isTerminalOpen={isTerminalOpen}
+        isBrowserOpen={isBrowserOpen}
 
         openNotes={() => {
           setIsNotesOpen(true)
@@ -193,6 +227,15 @@ const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
           setIsTerminalOpen(true)
           setIsTerminalMinimized(false)
           setActiveWindow("terminal")
+        }}
+        openBrowser={() => {
+
+          setIsBrowserOpen(true)
+
+          setIsBrowserMinimized(false)
+
+          setActiveWindow("browser")
+
         }}
       />
 

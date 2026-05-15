@@ -10,6 +10,8 @@ function Taskbar({
   openCalculator,
   isTerminalOpen,
   openTerminal,
+  isBrowserOpen,
+  openBrowser,
 }) {
   const [time, setTime] = useState("")
   const [isStartMenuOpen, setIsStartMenuOpen] = useState(false)
@@ -89,6 +91,15 @@ function Taskbar({
           >
             💻 Terminal
           </button>
+          <button
+            onClick={() => {
+              openBrowser()
+              setIsStartMenuOpen(false)
+            }}
+            className="bg-zinc-700 hover:bg-zinc-600 transition text-white px-4 py-3 rounded-xl text-left"
+          >
+            🌐 Browser
+          </button>
 
         </div>
 
@@ -120,6 +131,22 @@ function Taskbar({
     className="bg-zinc-700 px-3 py-1 rounded text-white"
   >
     Files
+  </button>
+)}
+{isTerminalOpen && (
+  <button
+    onClick={openTerminal}
+    className="bg-zinc-700 px-3 py-1 rounded text-white"
+  >
+    Terminal
+  </button>
+)}
+{isBrowserOpen && (
+  <button
+    onClick={openBrowser}
+    className="bg-zinc-700 px-3 py-1 rounded text-white"
+  >
+    Browser
   </button>
 )}
 
