@@ -10,6 +10,7 @@ import { useState } from "react"
 import Taskbar from "./Taskbar"
 import Notes from "./Notes"
 import FileExplorer from "./FileExplorer"
+import Terminal from "./Terminal"
 
 function Desktop() {
 
@@ -22,7 +23,11 @@ function Desktop() {
   const [activeWindow, setActiveWindow] = useState("")
   const [isFilesOpen, setIsFilesOpen] = useState(false)
 
-const [isFilesMinimized, setIsFilesMinimized] = useState(false)
+  const [isFilesMinimized, setIsFilesMinimized] = useState(false)
+
+  const [isTerminalOpen, setIsTerminalOpen] = useState(false)
+
+const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
 
   const apps = [
     {
@@ -36,6 +41,10 @@ const [isFilesMinimized, setIsFilesMinimized] = useState(false)
     {
       name: "Files",
       icon: <Folder size={40} />,
+    },
+    {
+      name: "Terminal",
+      icon: "💻",
     },
   ]
 
@@ -65,6 +74,12 @@ const [isFilesMinimized, setIsFilesMinimized] = useState(false)
                 setIsFilesOpen(true)
                 setIsFilesMinimized(false)
                 setActiveWindow("files")
+              }
+
+              if (app.name === "Terminal") {
+                setIsTerminalOpen(true)
+                setIsTerminalMinimized(false)
+                setActiveWindow("terminal")
               }
 
             }}
@@ -109,12 +124,21 @@ const [isFilesMinimized, setIsFilesMinimized] = useState(false)
           focusWindow={() => setActiveWindow("files")}
         />
       )}
+      {isTerminalOpen && !isTerminalMinimized && (
+        <Terminal
+          closeTerminal={() => setIsTerminalOpen(false)}
+          minimizeTerminal={() => setIsTerminalMinimized(true)}
+          isActive={activeWindow === "terminal"}
+          focusWindow={() => setActiveWindow("terminal")}
+        />
+      )}
 
       <Taskbar
         isNotesOpen={isNotesOpen}
         isCalculatorOpen={isCalculatorOpen}
         isFilesOpen={isFilesOpen}
         logout={() => signOut(auth)}
+        isTerminalOpen={isTerminalOpen}
 
         openNotes={() => {
           setIsNotesOpen(true)
@@ -134,6 +158,11 @@ const [isFilesMinimized, setIsFilesMinimized] = useState(false)
           setIsFilesOpen(true)
           setIsFilesMinimized(false)
           setActiveWindow("files")
+        }}
+        openTerminal={() => {
+          setIsTerminalOpen(true)
+          setIsTerminalMinimized(false)
+          setActiveWindow("terminal")
         }}
       />
 

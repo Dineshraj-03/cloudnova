@@ -8,6 +8,8 @@ function Taskbar({
   isCalculatorOpen,
   openNotes,
   openCalculator,
+  isTerminalOpen,
+  openTerminal,
 }) {
   const [time, setTime] = useState("")
   const [isStartMenuOpen, setIsStartMenuOpen] = useState(false)
@@ -77,6 +79,15 @@ function Taskbar({
             className="bg-zinc-700 hover:bg-zinc-600 transition text-white px-4 py-3 rounded-xl text-left"
           >
             📁 Files
+          </button>
+          <button
+            onClick={() => {
+              openTerminal()
+              setIsStartMenuOpen(false)
+            }}
+            className="bg-zinc-700 hover:bg-zinc-600 transition text-white px-4 py-3 rounded-xl text-left"
+          >
+            💻 Terminal
           </button>
 
         </div>
