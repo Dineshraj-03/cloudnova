@@ -1,21 +1,56 @@
 import { useEffect, useState } from "react"
+
 import Window from "./Window"
+
+import { auth, db } from "../firebase"
+
+import {
+  doc,
+  getDoc,
+  setDoc,
+} from "firebase/firestore"
 
 function Notes(props) {
 
   const [note, setNote] = useState("")
 
   useEffect(() => {
-    const savedNote = localStorage.getItem("cloudnova-note")
 
-    if (savedNote) {
-      setNote(savedNote)
+    const loadNote = async () => {
+
+      const user = auth.currentUser
+
+      if (!user) return
+
+      const docRef = doc(db, "notes", user.uid)
+
+      const docSnap = await getDoc(docRef)
+
+      if (docSnap.exists()) {
+        setNote(docSnap.data().content)
+      }
+
     }
+
+    loadNote()
+
   }, [])
 
-  useEffect(() => {
-    localStorage.setItem("cloudnova-note", note)
-  }, [note])
+  const saveNote = async (value) => {
+
+    setNote(value)
+
+    const user = auth.currentUser
+
+    if (!user) return
+
+    await setDoc(
+      doc(db, "notes", user.uid),
+      {
+        content: value,
+      }
+    )
+  }
 
   return (
     <Window
@@ -34,7 +69,9 @@ function Notes(props) {
 
       <textarea
         value={note}
-        onChange={(e) => setNote(e.target.value)}
+        onChange={(e) =>
+          saveNote(e.target.value)
+        }
         placeholder="Write something..."
         className="w-full h-full bg-zinc-800 text-white p-4 outline-none resize-none"
       />

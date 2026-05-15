@@ -1,5 +1,7 @@
 import { initializeApp } from "firebase/app"
+
 import { getAuth } from "firebase/auth"
+import { getFirestore } from "firebase/firestore"
 
 const firebaseConfig = {
   apiKey: "AIzaSyDG7xfCXzMp69rgjaq9HNUfB0D30k-FhZw",
@@ -8,8 +10,11 @@ const firebaseConfig = {
   storageBucket: "cloudnova-3e3f9.firebasestorage.app",
   messagingSenderId: "270695597011",
   appId: "1:270695597011:web:8248d39ab593be35c36526",
+  measurementId: "G-3HZZTD8Q6F"
 }
 
 const app = initializeApp(firebaseConfig)
 
 export const auth = getAuth(app)
+
+export const db = getFirestore(app)
