@@ -4,44 +4,66 @@ import Window from "./Window"
 function Terminal(props) {
 
   const [input, setInput] = useState("")
+
   const [history, setHistory] = useState([
     "Welcome to CloudNova Terminal",
     "Type 'help' to see commands.",
   ])
 
-const runCommand = () => {
+  const commands = {
 
-  const command = input.trim().toLowerCase()
+    help: [
+      "Available commands:",
+      "help",
+      "about",
+      "clear",
+      "date",
+      "whoami",
+      "open notes",
+      "open calculator",
+      "open files",
+      "shutdown",
+    ],
 
-  let output = []
+    about: [
+      "CloudNova OS Simulation",
+      "Built with React + Firebase",
+    ],
 
-  if (command === "open notes") {
+    whoami: [
+      "cloudnova-user",
+    ],
 
-    props.openNotes()
+    date: [
+      new Date().toString(),
+    ],
+  }
 
-    output = ["Opening Notes..."]
+  const runCommand = () => {
 
-  } else if (command === "open calculator") {
+    const command = input.trim().toLowerCase()
 
-    props.openCalculator()
+    let output = []
 
-    output = ["Opening Calculator..."]
+    if (command === "open notes") {
 
-  } else if (command === "open files") {
+      props.openNotes()
 
-    props.openFiles()
+      output = ["Opening Notes..."]
 
-    output = ["Opening Files..."]
+    } else if (command === "open calculator") {
 
-  } else if (command === "clear") {
+      props.openCalculator()
 
-    setHistory([])
+      output = ["Opening Calculator..."]
 
-    setInput("")
+    } else if (command === "open files") {
 
-    return
+      props.openFiles()
 
-  } else if (command === "shutdown") {
+      output = ["Opening Files..."]
+
+    } else if (command === "shutdown") {
 
       output = ["Shutting down CloudNova..."]
 
@@ -51,27 +73,34 @@ const runCommand = () => {
 
       }, 1500)
 
+    } else if (command === "clear") {
+
+      setHistory([])
+
+      setInput("")
+
+      return
+
+    } else if (commands[command]) {
+
+      output = commands[command]
+
+    } else {
+
+      output = [
+        `'${command}' is not recognized.`,
+      ]
+
     }
-  else if (commands[command]) {
 
-    output = commands[command]
+    setHistory([
+      ...history,
+      `> ${command}`,
+      ...output,
+    ])
 
-  } else {
-
-    output = [
-      `'${command}' is not recognized.`,
-    ]
-
+    setInput("")
   }
-
-  setHistory([
-    ...history,
-    `> ${command}`,
-    ...output,
-  ])
-
-  setInput("")
-}
 
   return (
     <Window
@@ -84,8 +113,8 @@ const runCommand = () => {
         x: 250,
         y: 120,
       }}
-      width="700px"
-      height="400px"
+      width="70vw"
+      height="55vh"
     >
 
       <div className="bg-black h-full text-green-400 font-mono p-4 overflow-auto">

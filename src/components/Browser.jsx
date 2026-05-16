@@ -32,8 +32,8 @@ function Browser(props) {
         x: 220,
         y: 90,
       }}
-      width="900px"
-      height="600px"
+      width="80vw"
+      height="80vh"
     >
 
       <div className="flex flex-col h-full bg-zinc-900">
