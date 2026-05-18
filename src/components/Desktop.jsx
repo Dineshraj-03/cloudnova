@@ -15,7 +15,11 @@ import FileExplorer from "./FileExplorer"
 import Terminal from "./Terminal"
 import Browser from "./Browser"
 
-function Desktop({ shutdownSystem }) {
+function Desktop({
+  shutdownSystem,
+  isAnyWindowMaximized,
+  setIsAnyWindowMaximized,
+}) {
 
   const [isNotesOpen, setIsNotesOpen] = useState(false)
   const [isCalculatorOpen, setIsCalculatorOpen] = useState(false)
@@ -36,34 +40,30 @@ function Desktop({ shutdownSystem }) {
   const [isBrowserMinimized, setIsBrowserMinimized] = useState(false)
 
   const apps = [
-  {
-    name: "Notes",
-    icon: <StickyNote size={46} strokeWidth={1.5} />,
-  },
-
-  {
-    name: "Calculator",
-    icon: <Calculator size={46} strokeWidth={1.5} />,
-  },
-
-  {
-    name: "Files",
-    icon: <FolderOpen size={46} strokeWidth={1.5} />,
-  },
-
-  {
-    name: "Terminal",
-    icon: <TerminalSquare size={46} strokeWidth={1.5} />,
-  },
-
-  {
-    name: "Browser",
-    icon: <Globe2 size={46} strokeWidth={1.5} />,
-  },
-]
+    {
+      name: "Notes",
+      icon: <StickyNote size={46} strokeWidth={1.5} />,
+    },
+    {
+      name: "Calculator",
+      icon: <Calculator size={46} strokeWidth={1.5} />,
+    },
+    {
+      name: "Files",
+      icon: <FolderOpen size={46} strokeWidth={1.5} />,
+    },
+    {
+      name: "Terminal",
+      icon: <TerminalSquare size={46} strokeWidth={1.5} />,
+    },
+    {
+      name: "Browser",
+      icon: <Globe2 size={46} strokeWidth={1.5} />,
+    },
+  ]
 
   return (
-    <div className="h-screen bg-zinc-900 relative overflow-hidden">
+    <div className="fixed inset-0 bg-zinc-900 overflow-hidden">
 
       <div className="p-6 flex flex-col gap-6">
 
@@ -95,40 +95,33 @@ function Desktop({ shutdownSystem }) {
                 setIsTerminalMinimized(false)
                 setActiveWindow("terminal")
               }
+
               if (app.name === "Browser") {
-
                 setIsBrowserOpen(true)
-
                 setIsBrowserMinimized(false)
-
                 setActiveWindow("browser")
-
               }
-
             }}
             className="
-            w-20
-            flex
-            flex-col
-            items-center
-            text-white
-            cursor-pointer
-            transition-all
-            duration-200
-            hover:scale-110
-            hover:-translate-y-1
-            hover:text-blue-400
+              w-20
+              flex
+              flex-col
+              items-center
+              text-white
+              cursor-pointer
+              transition-all
+              duration-200
+              hover:scale-110
+              hover:-translate-y-1
+              hover:text-blue-400
             "
           >
-
             <div className="text-4xl">
               {app.icon}
             </div>
-
             <p className="mt-2 text-sm">
               {app.name}
             </p>
-
           </div>
         ))}
 
@@ -140,6 +133,7 @@ function Desktop({ shutdownSystem }) {
           minimizeNotes={() => setIsNotesMinimized(true)}
           isActive={activeWindow === "notes"}
           focusWindow={() => setActiveWindow("notes")}
+          setIsAnyWindowMaximized={setIsAnyWindowMaximized}
         />
       )}
 
@@ -149,16 +143,20 @@ function Desktop({ shutdownSystem }) {
           minimizeCalculator={() => setIsCalculatorMinimized(true)}
           isActive={activeWindow === "calculator"}
           focusWindow={() => setActiveWindow("calculator")}
+          setIsAnyWindowMaximized={setIsAnyWindowMaximized}
         />
       )}
+
       {isFilesOpen && !isFilesMinimized && (
         <FileExplorer
           closeFiles={() => setIsFilesOpen(false)}
           minimizeFiles={() => setIsFilesMinimized(true)}
           isActive={activeWindow === "files"}
           focusWindow={() => setActiveWindow("files")}
+          setIsAnyWindowMaximized={setIsAnyWindowMaximized}
         />
       )}
+
       {isTerminalOpen && !isTerminalMinimized && (
         <Terminal
           closeTerminal={() => setIsTerminalOpen(false)}
@@ -171,73 +169,83 @@ function Desktop({ shutdownSystem }) {
             setIsNotesMinimized(false)
             setActiveWindow("notes")
           }}
-
           openCalculator={() => {
             setIsCalculatorOpen(true)
             setIsCalculatorMinimized(false)
             setActiveWindow("calculator")
           }}
-
           openFiles={() => {
             setIsFilesOpen(true)
             setIsFilesMinimized(false)
             setActiveWindow("files")
           }}
+          setIsAnyWindowMaximized={setIsAnyWindowMaximized}
         />
       )}
-      {isBrowserOpen && !isBrowserMinimized && (
 
+      {isBrowserOpen && !isBrowserMinimized && (
         <Browser
           closeBrowser={() => setIsBrowserOpen(false)}
           minimizeBrowser={() => setIsBrowserMinimized(true)}
           isActive={activeWindow === "browser"}
           focusWindow={() => setActiveWindow("browser")}
+          setIsAnyWindowMaximized={setIsAnyWindowMaximized}
         />
-
       )}
 
-      <Taskbar
-        isNotesOpen={isNotesOpen}
-        isCalculatorOpen={isCalculatorOpen}
-        isFilesOpen={isFilesOpen}
-        logout={() => signOut(auth)}
-        isTerminalOpen={isTerminalOpen}
-        isBrowserOpen={isBrowserOpen}
+      {!isAnyWindowMaximized && (
 
-        openNotes={() => {
-          setIsNotesOpen(true)
-          setIsNotesMinimized(false)
-          setActiveWindow("notes")
-        }}
+  <Taskbar
+    isAnyWindowMaximized={
+      isAnyWindowMaximized
+    }
 
-        openCalculator={() => {
-          setIsCalculatorOpen(true)
-          setIsCalculatorMinimized(false)
-          setActiveWindow("calculator")
-        }}
+    isNotesOpen={isNotesOpen}
+    isCalculatorOpen={isCalculatorOpen}
+    isFilesOpen={isFilesOpen}
 
-        openFiles={() => {
-          console.log("FILES BUTTON CLICKED")
+    logout={() => signOut(auth)}
 
-          setIsFilesOpen(true)
-          setIsFilesMinimized(false)
-          setActiveWindow("files")
-        }}
-        openTerminal={() => {
-          setIsTerminalOpen(true)
-          setIsTerminalMinimized(false)
-          setActiveWindow("terminal")
-        }}
-        openBrowser={() => {
+    isTerminalOpen={isTerminalOpen}
+    isBrowserOpen={isBrowserOpen}
 
-          setIsBrowserOpen(true)
+    openNotes={() => {
+      setIsNotesOpen(true)
+      setIsNotesMinimized(false)
+      setActiveWindow("notes")
+    }}
 
-          setIsBrowserMinimized(false)
+    openCalculator={() => {
+      setIsCalculatorOpen(true)
+      setIsCalculatorMinimized(false)
+      setActiveWindow("calculator")
+    }}
 
-          setActiveWindow("browser")
+    openFiles={() => {
+      setIsFilesOpen(true)
+      setIsFilesMinimized(false)
+      setActiveWindow("files")
+    }}
 
-        }}
-      />
+    openTerminal={() => {
+      setIsTerminalOpen(true)
+      setIsTerminalMinimized(false)
+      setActiveWindow("terminal")
+    }}
+
+    openBrowser={() => {
+      setIsBrowserOpen(true)
+      setIsBrowserMinimized(false)
+      setActiveWindow("browser")
+    }}
+
+    setIsAnyWindowMaximized={
+      setIsAnyWindowMaximized
+    }
+
+  />
+
+)}
 
     </div>
   )
