@@ -12,6 +12,14 @@ function App() {
   const [isBooting, setIsBooting] = useState(true)
   const [bootMessages, setBootMessages] = useState([])
   const [isShutdown, setIsShutdown] = useState(false)
+  const [
+  wallpaper,
+  setWallpaper,
+] = useState(
+  localStorage.getItem("cloudnova-wallpaper")
+  ||
+  "https://images.unsplash.com/photo-1506744038136-46273834b3fb?q=80&w=1600&auto=format&fit=crop"
+)
   const [maximizedCount, setIsAnyWindowMaximized] = useState(0)
 
   useEffect(() => {
@@ -20,6 +28,14 @@ function App() {
     })
     return () => unsubscribe()
   }, [])
+  useEffect(() => {
+
+  localStorage.setItem(
+    "cloudnova-wallpaper",
+    wallpaper
+  )
+
+}, [wallpaper])
 
   const runBootSequence = () => {
     const messages = [
@@ -95,6 +111,8 @@ function App() {
           shutdownSystem={() => setIsShutdown(true)}
           isAnyWindowMaximized={maximizedCount > 0}
           setIsAnyWindowMaximized={setIsAnyWindowMaximized}
+          wallpaper={wallpaper}
+setWallpaper={setWallpaper}
         />
       ) : (
         <Auth />

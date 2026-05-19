@@ -21,6 +21,8 @@ function Desktop({
   shutdownSystem,
   isAnyWindowMaximized,
   setIsAnyWindowMaximized,
+  wallpaper,
+  setWallpaper,
 }) {
 
   const [isNotesOpen, setIsNotesOpen] = useState(false)
@@ -72,8 +74,40 @@ const [isSettingsMinimized, setIsSettingsMinimized] = useState(false)
   ]
 
   return (
-    <div className="fixed inset-0 bg-zinc-900 overflow-hidden">
+    <div className="
+fixed
+inset-0
+overflow-hidden
+">
 
+  <div
+    className="
+    absolute
+    inset-0
+    bg-cover
+    bg-center
+    transition-all
+    duration-700
+    ease-out
+    scale-105
+    "
+    style={{
+      backgroundImage: `url(${wallpaper})`,
+    }}
+  />
+
+  <div className="
+  absolute
+  inset-0
+  bg-black/10
+  backdrop-blur-[1px]
+  " />
+
+  <div className="
+  relative
+  z-10
+  h-full
+  ">
       <div className="p-6 flex flex-col gap-6">
 
         {apps.map((app) => (
@@ -213,6 +247,8 @@ const [isSettingsMinimized, setIsSettingsMinimized] = useState(false)
   isActive={activeWindow === "settings"}
   focusWindow={() => setActiveWindow("settings")}
   setIsAnyWindowMaximized={setIsAnyWindowMaximized}
+  wallpaper={wallpaper}
+setWallpaper={setWallpaper}
 />
 )}
 
@@ -269,6 +305,7 @@ const [isSettingsMinimized, setIsSettingsMinimized] = useState(false)
   />
 
 )}
+    </div>
 
     </div>
   )
