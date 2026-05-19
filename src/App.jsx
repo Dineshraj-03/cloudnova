@@ -6,12 +6,14 @@ import Desktop from "./components/Desktop"
 import { auth } from "./firebase"
 import { onAuthStateChanged } from "firebase/auth"
 
+
 function App() {
 
   const [user, setUser] = useState(null)
   const [isBooting, setIsBooting] = useState(true)
   const [bootMessages, setBootMessages] = useState([])
   const [isShutdown, setIsShutdown] = useState(false)
+  
   const [
   wallpaper,
   setWallpaper,
@@ -103,6 +105,7 @@ function App() {
       </div>
     )
   }
+  
 
   return (
     <>
@@ -112,10 +115,10 @@ function App() {
           isAnyWindowMaximized={maximizedCount > 0}
           setIsAnyWindowMaximized={setIsAnyWindowMaximized}
           wallpaper={wallpaper}
-setWallpaper={setWallpaper}
+          setWallpaper={setWallpaper}
         />
       ) : (
-        <Auth />
+        <Auth wallpaper={wallpaper} />
       )}
     </>
   )
