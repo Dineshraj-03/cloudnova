@@ -7,6 +7,7 @@ import {
   FolderOpen,
   Globe2,
   TerminalSquare,
+  Settings,
 } from "lucide-react"
 import { useState } from "react"
 import Taskbar from "./Taskbar"
@@ -14,6 +15,7 @@ import Notes from "./Notes"
 import FileExplorer from "./FileExplorer"
 import Terminal from "./Terminal"
 import Browser from "./Browser"
+import SettingsApp from "./Settings"
 
 function Desktop({
   shutdownSystem,
@@ -36,6 +38,9 @@ function Desktop({
 
   const [isTerminalMinimized, setIsTerminalMinimized] = useState(false)
   const [isBrowserOpen, setIsBrowserOpen] = useState(false)
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false)
+
+const [isSettingsMinimized, setIsSettingsMinimized] = useState(false)
 
   const [isBrowserMinimized, setIsBrowserMinimized] = useState(false)
 
@@ -60,6 +65,10 @@ function Desktop({
       name: "Browser",
       icon: <Globe2 size={46} strokeWidth={1.5} />,
     },
+    {
+  name: "Settings",
+  icon: <Settings size={46} strokeWidth={1.5} />,
+},
   ]
 
   return (
@@ -100,6 +109,11 @@ function Desktop({
                 setIsBrowserOpen(true)
                 setIsBrowserMinimized(false)
                 setActiveWindow("browser")
+              }
+              if (app.name === "Settings") {
+                setIsSettingsOpen(true)
+                setIsSettingsMinimized(false)
+                setActiveWindow("settings")
               }
             }}
             className="
@@ -192,6 +206,15 @@ function Desktop({
           setIsAnyWindowMaximized={setIsAnyWindowMaximized}
         />
       )}
+      {isSettingsOpen && !isSettingsMinimized && (
+  <SettingsApp
+  closeSettings={() => setIsSettingsOpen(false)}
+  minimizeSettings={() => setIsSettingsMinimized(true)}
+  isActive={activeWindow === "settings"}
+  focusWindow={() => setActiveWindow("settings")}
+  setIsAnyWindowMaximized={setIsAnyWindowMaximized}
+/>
+)}
 
       {!isAnyWindowMaximized && (
 
