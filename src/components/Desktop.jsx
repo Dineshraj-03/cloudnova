@@ -1,7 +1,7 @@
 import { useEffect, useState, useCallback, useRef } from "react"
 import { signOut } from "firebase/auth"
 import { doc, getDoc, setDoc } from "firebase/firestore"
-import { auth, db } from "../firebase"           // ← make sure db is exported from your firebase.js
+import { auth, db } from "../firebase"
 import {
   StickyNote,
   Calculator,
@@ -9,6 +9,10 @@ import {
   Globe2,
   TerminalSquare,
   Settings,
+  FolderPlus,
+  Info,
+  Image,
+  LayoutGrid,
 } from "lucide-react"
 
 import Taskbar from "./Taskbar"
@@ -19,9 +23,10 @@ import Terminal from "./Terminal"
 import Browser from "./Browser"
 import SettingsApp from "./Settings"
 import DesktopIcon from "./DesktopIcon"
+import ContextMenu from "./ContextMenu.jsx"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Default icon layout (column on the left, macOS-style)
+// Default icon layout
 // ─────────────────────────────────────────────────────────────────────────────
 const DEFAULT_POSITIONS = {
   notes:      { x: 24, y: 24  },
@@ -42,7 +47,6 @@ async function loadIconPositions(uid) {
     if (snap.exists()) {
       const data = snap.data()
       if (data.iconPositions) {
-        // Merge with defaults so new icons always have a fallback position
         return { ...DEFAULT_POSITIONS, ...data.iconPositions }
       }
     }
@@ -52,21 +56,23 @@ async function loadIconPositions(uid) {
   return { ...DEFAULT_POSITIONS }
 }
 
-// Debounce helper — saves at most once every `delay` ms per drag session
 function useDebouncedSave(delay = 800) {
   const timer = useRef(null)
-  return useCallback((uid, positions) => {
-    if (!uid) return
-    clearTimeout(timer.current)
-    timer.current = setTimeout(async () => {
-      try {
-        const ref = doc(db, "usersettings", uid)
-        await setDoc(ref, { iconPositions: positions }, { merge: true })
-      } catch (err) {
-        console.error("CloudNova: failed to save icon positions", err)
-      }
-    }, delay)
-  }, [delay])
+  return useCallback(
+    (uid, positions) => {
+      if (!uid) return
+      clearTimeout(timer.current)
+      timer.current = setTimeout(async () => {
+        try {
+          const ref = doc(db, "usersettings", uid)
+          await setDoc(ref, { iconPositions: positions }, { merge: true })
+        } catch (err) {
+          console.error("CloudNova: failed to save icon positions", err)
+        }
+      }, delay)
+    },
+    [delay]
+  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -99,21 +105,152 @@ function Desktop({
   // ── icon positions ──────────────────────────────────────────────
   const [iconPositions, setIconPositions] = useState(DEFAULT_POSITIONS)
   const [positionsLoaded, setPosLoaded]   = useState(false)
+  const [uid, setUid]                     = useState(null)
+  const savePositions                     = useDebouncedSave(800)
 
-  // current user uid (resolved once auth state is known)
-  const [uid, setUid] = useState(null)
+  // ── desktop context menu state ──────────────────────────────────
+  const [desktopCtx, setDesktopCtx] = useState({ visible: false, x: 0, y: 0 })
+    // ── app definitions ─────────────────────────────────────────────
+const DEFAULT_APPS = [
+  {
+    id: "notes",
+    label: "Notes",
+    icon: (
+      <StickyNote
+        size={40}
+        strokeWidth={1.5}
+      />
+    ),
+  },
 
-  const savePositions = useDebouncedSave(800)
+  {
+    id: "calculator",
+    label: "Calculator",
+    icon: (
+      <Calculator
+        size={40}
+        strokeWidth={1.5}
+      />
+    ),
+  },
 
-  // ── resolve uid from Firebase Auth ─────────────────────────────
+  {
+    id: "files",
+    label: "Files",
+    icon: (
+      <FolderOpen
+        size={40}
+        strokeWidth={1.5}
+      />
+    ),
+  },
+
+  {
+    id: "terminal",
+    label: "Terminal",
+    icon: (
+      <TerminalSquare
+        size={40}
+        strokeWidth={1.5}
+      />
+    ),
+  },
+
+  {
+    id: "browser",
+    label: "Browser",
+    icon: (
+      <Globe2
+        size={40}
+        strokeWidth={1.5}
+      />
+    ),
+  },
+
+  {
+    id: "settings",
+    label: "Settings",
+    icon: (
+      <Settings
+        size={40}
+        strokeWidth={1.5}
+      />
+    ),
+  },
+]
+const [apps, setApps] =
+  useState(DEFAULT_APPS)
+
+  // ── rename / properties / delete state (stubs ready for your impl) ──
+  const [renamingId, setRenamingId] = useState(null) // extend as needed
+
+  // ── resolve uid ─────────────────────────────────────────────────
   useEffect(() => {
     const unsub = auth.onAuthStateChanged((user) => {
       setUid(user ? user.uid : null)
     })
     return unsub
   }, [])
+  useEffect(() => {
 
-  // ── load positions from Firestore when uid is known ─────────────
+  if (!uid) return
+
+  const loadApps = async () => {
+
+    const ref =
+      doc(db, "usersettings", uid)
+
+    const snap =
+      await getDoc(ref)
+
+    if (!snap.exists()) return
+
+    const data = snap.data()
+
+    if (data.apps) {
+
+      const mergedApps = [
+
+  ...DEFAULT_APPS,
+
+  ...data.apps.filter(
+    (app) =>
+      app.id.startsWith("folder_")
+  ),
+
+]
+
+setApps(
+
+  mergedApps.map((app) => ({
+
+    ...app,
+
+    icon:
+      app.id.startsWith("folder_")
+        ? (
+            <FolderOpen
+              size={40}
+              strokeWidth={1.5}
+            />
+          )
+        : DEFAULT_APPS.find(
+            (a) => a.id === app.id
+          )?.icon,
+
+  }))
+
+)
+
+    }
+
+  }
+
+  loadApps()
+
+}, [uid])
+
+  // ── load icon positions ─────────────────────────────────────────
   useEffect(() => {
     if (!uid) return
     let cancelled = false
@@ -126,7 +263,7 @@ function Desktop({
     return () => { cancelled = true }
   }, [uid])
 
-  // ── called by DesktopIcon after each drag ends ──────────────────
+  // ── icon drag → Firestore ───────────────────────────────────────
   const handlePositionChange = useCallback(
     (iconId, newPos) => {
       setIconPositions((prev) => {
@@ -138,8 +275,15 @@ function Desktop({
     [uid, savePositions]
   )
 
-  // ── open app helpers ────────────────────────────────────────────
+  // ── open app helper ─────────────────────────────────────────────
   const openApp = useCallback((name) => {
+    if (name.startsWith("folder_")) {
+
+    alert("Folder opened")
+
+    return
+
+  }
     const map = {
       notes:      () => { setIsNotesOpen(true);      setIsNotesMinimized(false);      setActiveWindow("notes")      },
       calculator: () => { setIsCalculatorOpen(true); setIsCalculatorMinimized(false); setActiveWindow("calculator") },
@@ -151,15 +295,168 @@ function Desktop({
     map[name]?.()
   }, [])
 
-  // ── app definitions ─────────────────────────────────────────────
-  const apps = [
-    { id: "notes",      label: "Notes",      icon: <StickyNote    size={40} strokeWidth={1.5} /> },
-    { id: "calculator", label: "Calculator", icon: <Calculator    size={40} strokeWidth={1.5} /> },
-    { id: "files",      label: "Files",      icon: <FolderOpen    size={40} strokeWidth={1.5} /> },
-    { id: "terminal",   label: "Terminal",   icon: <TerminalSquare size={40} strokeWidth={1.5} /> },
-    { id: "browser",    label: "Browser",    icon: <Globe2        size={40} strokeWidth={1.5} /> },
-    { id: "settings",   label: "Settings",   icon: <Settings      size={40} strokeWidth={1.5} /> },
+  // ── icon context menu handlers ──────────────────────────────────
+const handleIconRename = useCallback((id) => {
+
+  const currentApp =
+    apps.find(
+      (app) => app.id === id
+    )
+
+  if (!currentApp) return
+
+  const newLabel =
+    window.prompt(
+      "Rename icon:",
+      currentApp.label
+    )
+
+  if (
+    !newLabel ||
+    !newLabel.trim()
+  ) return
+
+  setApps((prev) =>
+    prev.map((app) => {
+
+      if (app.id === id) {
+
+        return {
+          ...app,
+          label:
+            newLabel.trim(),
+        }
+
+      }
+
+      return app
+
+    })
+  )
+
+}, [apps])
+
+  const handleIconDelete = useCallback((id) => {
+    // Stub: wire up to your delete logic (remove from iconPositions / Firestore)
+    console.log("Delete icon:", id)
+    // Example: hide the icon by removing its position entry
+    setIconPositions((prev) => {
+      const updated = { ...prev }
+      delete updated[id]
+      savePositions(uid, updated)
+      return updated
+    })
+  }, [uid, savePositions])
+
+  const handleIconProperties = useCallback((id) => {
+    // Stub: open a Properties dialog
+    console.log("Properties:", id)
+    // You can open a modal here, e.g. setPropertiesTarget(id)
+    window.alert(`Properties for: ${id}\nPosition: ${JSON.stringify(iconPositions[id])}`)
+  }, [iconPositions])
+
+  // ── desktop right-click → show desktop context menu ─────────────
+  // Only fires when clicking the desktop surface itself (not on icons,
+  // because DesktopIcon calls e.stopPropagation() on its onContextMenu).
+  const handleDesktopContextMenu = useCallback((e) => {
+    e.preventDefault()
+    // Close any already-open menu before opening a new one
+    setDesktopCtx({ visible: true, x: e.clientX, y: e.clientY })
+  }, [])
+
+  // ── desktop menu items ──────────────────────────────────────────
+  const desktopMenuItems = [
+    {
+      label: "New Folder",
+      icon: <FolderPlus size={14} />,
+      action: async () => {
+
+  const newId =
+    `folder_${Date.now()}`
+
+  const newPos = {
+    x: desktopCtx.x,
+    y: desktopCtx.y,
+  }
+
+  const updatedApps = [
+  ...apps,
+  {
+    id: newId,
+    label: "New Folder",
+  },
+]
+
+setApps(
+  updatedApps.map((app) => ({
+    ...app,
+    icon:
+      app.id.startsWith("folder_")
+        ? (
+            <FolderOpen
+              size={40}
+              strokeWidth={1.5}
+            />
+          )
+        : app.icon,
+  }))
+)
+
+await setDoc(
+  doc(db, "usersettings", uid),
+  {
+    apps: updatedApps.map(
+      ({ icon, ...rest }) => rest
+    ),
+  },
+  { merge: true }
+)
+
+  setIconPositions((prev) => {
+
+    const updated = {
+      ...prev,
+      [newId]: newPos,
+    }
+
+    savePositions(uid, updated)
+
+    return updated
+
+  })
+
+},
+    },
+    {
+      label: "Get Info",
+      icon: <Info size={14} />,
+      action: async () => {
+        // Stub: show desktop info
+        console.log("Get Info")
+        const screenInfo = `Screen: ${window.innerWidth} × ${window.innerHeight}\nIcons: ${Object.keys(iconPositions).length}`
+        window.alert(screenInfo)
+      },
+    },
+    { separator: true },
+    {
+      label: "Change Wallpaper",
+      icon: <Image size={14} />,
+      action: () => {
+        // Opens the Settings app on the Wallpaper tab
+        openApp("settings")
+      },
+    },
+    {
+      label: "Edit Widgets",
+      icon: <LayoutGrid size={14} />,
+      action: () => {
+        // Stub: open widget editor
+        console.log("Edit Widgets")
+      },
+    },
   ]
+
+
 
   // ─────────────────────────────────────────────────────────────────
   return (
@@ -174,31 +471,39 @@ function Desktop({
       {/* Overlay */}
       <div className="absolute inset-0 bg-black/10 backdrop-blur-[1px]" />
 
-      {/* Desktop surface */}
+      {/* Desktop surface
+          onContextMenu here fires ONLY when the target is the desktop itself,
+          because DesktopIcon calls e.stopPropagation() on its own onContextMenu.
+      */}
       <div
-  className="relative z-10 h-full"
-  onContextMenu={(e) => e.preventDefault()}
->
+        className="relative z-10 h-full"
+        onContextMenu={handleDesktopContextMenu}
+      >
 
         {/* ── Draggable desktop icons ──────────────────────────── */}
-        {/*
-            We only render icons once positions have loaded from Firestore,
-            so they never flash at default positions first.
-        */}
         {positionsLoaded && apps.map((app) => (
           <DesktopIcon
             key={app.id}
             id={app.id}
             label={app.label}
             icon={app.icon}
-            position={iconPositions[app.id] ?? DEFAULT_POSITIONS[app.id]}
+            position={
+  iconPositions[app.id] ??
+  DEFAULT_POSITIONS[app.id] ?? {
+    x: 100,
+    y: 100,
+  }
+}
             onPositionChange={handlePositionChange}
             onOpen={() => openApp(app.id)}
+            onRename={handleIconRename}
+            onDelete={handleIconDelete}
+            onProperties={handleIconProperties}
           />
         ))}
 
-        {/* Skeleton / loading shimmer while positions are loading */}
-        {!positionsLoaded && apps.map((app, i) => (
+        {/* Skeleton while positions load */}
+        {!positionsLoaded && apps.map((app) => (
           <div
             key={app.id}
             className="absolute flex flex-col items-center gap-2 w-20 animate-pulse"
@@ -294,6 +599,15 @@ function Desktop({
             setIsAnyWindowMaximized={setIsAnyWindowMaximized}
           />
         )}
+
+        {/* ── Desktop context menu ─────────────────────────────── */}
+        <ContextMenu
+          visible={desktopCtx.visible}
+          x={desktopCtx.x}
+          y={desktopCtx.y}
+          items={desktopMenuItems}
+          onClose={() => setDesktopCtx((prev) => ({ ...prev, visible: false }))}
+        />
 
       </div>
     </div>
