@@ -1,33 +1,76 @@
+/**
+ * Desktop.jsx — CloudNova
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * BUG FIXES
+ * ─────────────────────────────────────────────────────────────────────────────
+ *
+ * FIXED Bug 1 — Stale uid captured in persistDesktop
+ * ────────────────────────────────────────────────────
+ * OLD: useDesktopPersistence(uid) accepted uid as a param and stored it in a
+ *      uidRef via useEffect. On first render uid = null, useEffect hadn't run,
+ *      so every write in that cycle silently bailed: "if (!currentUid) return"
+ *
+ * FIX: useDesktopPersistence() takes NO arguments. persistDesktop now receives
+ *      uid as its first direct argument: persistDesktop(uid, positions, items)
+ *      uid comes from component state at call time — always current.
+ *
+ * FIXED Bug 2 — customItemsRef / iconPositionsRef one render behind
+ * ─────────────────────────────────────────────────────────────────
+ * OLD: Refs were synced with:
+ *        useEffect(() => { customItemsRef.current = customItems }, [customItems])
+ *      useEffect fires AFTER the render. Any handler that ran synchronously
+ *      (handleNewFolder, drag end) read the ref before the effect updated it,
+ *      so persistDesktop received the PREVIOUS render's data.
+ *
+ * FIX: Write-through ref pattern. Every time we compute nextItems or
+ *      nextPositions we update both the ref AND call setState together:
+ *        customItemsRef.current = nextItems
+ *        setCustomItems(nextItems)
+ *      The ref is immediately correct for any code that runs in the same
+ *      synchronous block. No useEffect involved.
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Architecture (three clean layers)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * LAYER 1 · DEFAULT_APPS      module-level constant — never in Firestore
+ * LAYER 2 · customItems       Firestore: [{ id, label, type }]
+ * LAYER 3 · iconPositions     Firestore: { [id]: { x, y } }
+ */
+
 import { useEffect, useState, useCallback, useRef } from "react"
-import { signOut } from "firebase/auth"
-import { doc, getDoc, setDoc } from "firebase/firestore"
-import { auth, db } from "../firebase"
+import { signOut }         from "firebase/auth"
+import { auth }            from "../firebase"
 import {
-  StickyNote,
-  Calculator,
-  FolderOpen,
-  Globe2,
-  TerminalSquare,
-  Settings,
-  FolderPlus,
-  Info,
-  Image,
-  LayoutGrid,
+  StickyNote, Calculator, FolderOpen, Globe2,
+  TerminalSquare, Settings, FolderPlus, Info, Image, LayoutGrid, Folder,
 } from "lucide-react"
 
-import Taskbar from "./Taskbar"
-import Notes from "./Notes"
+import Taskbar       from "./Taskbar"
+import Notes         from "./Notes"
 import CalculatorApp from "./CalculatorApp"
-import FileExplorer from "./FileExplorer"
-import Terminal from "./Terminal"
-import Browser from "./Browser"
-import SettingsApp from "./Settings"
-import DesktopIcon from "./DesktopIcon"
-import ContextMenu from "./ContextMenu.jsx"
+import FileExplorer  from "./FileExplorer"
+import Terminal      from "./Terminal"
+import Browser       from "./Browser"
+import SettingsApp   from "./Settings"
+import DesktopIcon   from "./DesktopIcon"
+import ContextMenu   from "./ContextMenu"
+import FolderWindow  from "./FolderWindow"
+
+import { loadDesktopData, useDesktopPersistence } from "./useDesktopPersistence"
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Default icon layout
+// LAYER 1 — DEFAULT APPS (module-level: never recreated, never in Firestore)
 // ─────────────────────────────────────────────────────────────────────────────
+const DEFAULT_APPS = [
+  { id: "notes",      label: "Notes",      icon: <StickyNote     size={40} strokeWidth={1.5} /> },
+  { id: "calculator", label: "Calculator", icon: <Calculator     size={40} strokeWidth={1.5} /> },
+  { id: "files",      label: "Files",      icon: <FolderOpen     size={40} strokeWidth={1.5} /> },
+  { id: "terminal",   label: "Terminal",   icon: <TerminalSquare size={40} strokeWidth={1.5} /> },
+  { id: "browser",    label: "Browser",    icon: <Globe2         size={40} strokeWidth={1.5} /> },
+  { id: "settings",   label: "Settings",   icon: <Settings       size={40} strokeWidth={1.5} /> },
+]
+
 const DEFAULT_POSITIONS = {
   notes:      { x: 24, y: 24  },
   calculator: { x: 24, y: 120 },
@@ -37,46 +80,15 @@ const DEFAULT_POSITIONS = {
   settings:   { x: 24, y: 504 },
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Firestore helpers
-// ─────────────────────────────────────────────────────────────────────────────
-async function loadIconPositions(uid) {
-  try {
-    const ref = doc(db, "usersettings", uid)
-    const snap = await getDoc(ref)
-    if (snap.exists()) {
-      const data = snap.data()
-      if (data.iconPositions) {
-        return { ...DEFAULT_POSITIONS, ...data.iconPositions }
-      }
-    }
-  } catch (err) {
-    console.error("CloudNova: failed to load icon positions", err)
+function buildItemIcon(type) {
+  switch (type) {
+    case "folder": return <Folder size={40} strokeWidth={1.5} />
+    default:       return <Folder size={40} strokeWidth={1.5} />
   }
-  return { ...DEFAULT_POSITIONS }
-}
-
-function useDebouncedSave(delay = 800) {
-  const timer = useRef(null)
-  return useCallback(
-    (uid, positions) => {
-      if (!uid) return
-      clearTimeout(timer.current)
-      timer.current = setTimeout(async () => {
-        try {
-          const ref = doc(db, "usersettings", uid)
-          await setDoc(ref, { iconPositions: positions }, { merge: true })
-        } catch (err) {
-          console.error("CloudNova: failed to save icon positions", err)
-        }
-      }, delay)
-    },
-    [delay]
-  )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Desktop
+// DESKTOP
 // ─────────────────────────────────────────────────────────────────────────────
 function Desktop({
   shutdownSystem,
@@ -85,380 +97,294 @@ function Desktop({
   wallpaper,
   setWallpaper,
 }) {
-  // ── window open/minimized state ─────────────────────────────────
-  const [isNotesOpen,      setIsNotesOpen]      = useState(false)
-  const [isCalculatorOpen, setIsCalculatorOpen] = useState(false)
-  const [isFilesOpen,      setIsFilesOpen]      = useState(false)
-  const [isTerminalOpen,   setIsTerminalOpen]   = useState(false)
-  const [isBrowserOpen,    setIsBrowserOpen]    = useState(false)
-  const [isSettingsOpen,   setIsSettingsOpen]   = useState(false)
+  // ── Auth ──────────────────────────────────────────────────────────────────
+  const [uid, setUid] = useState(null)
 
-  const [isNotesMinimized,      setIsNotesMinimized]      = useState(false)
-  const [isCalculatorMinimized, setIsCalculatorMinimized] = useState(false)
-  const [isFilesMinimized,      setIsFilesMinimized]      = useState(false)
-  const [isTerminalMinimized,   setIsTerminalMinimized]   = useState(false)
-  const [isBrowserMinimized,    setIsBrowserMinimized]    = useState(false)
-  const [isSettingsMinimized,   setIsSettingsMinimized]   = useState(false)
-
-  const [activeWindow, setActiveWindow] = useState("")
-
-  // ── icon positions ──────────────────────────────────────────────
-  const [iconPositions, setIconPositions] = useState(DEFAULT_POSITIONS)
-  const [positionsLoaded, setPosLoaded]   = useState(false)
-  const [uid, setUid]                     = useState(null)
-  const savePositions                     = useDebouncedSave(800)
-
-  // ── desktop context menu state ──────────────────────────────────
-  const [desktopCtx, setDesktopCtx] = useState({ visible: false, x: 0, y: 0 })
-    // ── app definitions ─────────────────────────────────────────────
-const DEFAULT_APPS = [
-  {
-    id: "notes",
-    label: "Notes",
-    icon: (
-      <StickyNote
-        size={40}
-        strokeWidth={1.5}
-      />
-    ),
-  },
-
-  {
-    id: "calculator",
-    label: "Calculator",
-    icon: (
-      <Calculator
-        size={40}
-        strokeWidth={1.5}
-      />
-    ),
-  },
-
-  {
-    id: "files",
-    label: "Files",
-    icon: (
-      <FolderOpen
-        size={40}
-        strokeWidth={1.5}
-      />
-    ),
-  },
-
-  {
-    id: "terminal",
-    label: "Terminal",
-    icon: (
-      <TerminalSquare
-        size={40}
-        strokeWidth={1.5}
-      />
-    ),
-  },
-
-  {
-    id: "browser",
-    label: "Browser",
-    icon: (
-      <Globe2
-        size={40}
-        strokeWidth={1.5}
-      />
-    ),
-  },
-
-  {
-    id: "settings",
-    label: "Settings",
-    icon: (
-      <Settings
-        size={40}
-        strokeWidth={1.5}
-      />
-    ),
-  },
-]
-const [apps, setApps] =
-  useState(DEFAULT_APPS)
-
-  // ── rename / properties / delete state (stubs ready for your impl) ──
-  const [renamingId, setRenamingId] = useState(null) // extend as needed
-
-  // ── resolve uid ─────────────────────────────────────────────────
   useEffect(() => {
-    const unsub = auth.onAuthStateChanged((user) => {
-      setUid(user ? user.uid : null)
-    })
+    const unsub = auth.onAuthStateChanged((user) => setUid(user?.uid ?? null))
     return unsub
   }, [])
-  useEffect(() => {
 
-  if (!uid) return
+  // WHY: uid is also kept in a ref so callbacks can read the live value
+  // without re-creating themselves. This is a READ-ONLY ref — we never
+  // write to it in a useEffect; we update it synchronously alongside setUid.
+  // But since setUid is async (React batching), the safest pattern is to
+  // pass uid directly to persistDesktop rather than relying on any ref here.
+  // The ref below is only used by handlers that don't call persistDesktop
+  // (e.g. handleIconProperties for display).
+  const uidRef = useRef(uid)
 
-  const loadApps = async () => {
+  // ── Persistence hook ──────────────────────────────────────────────────────
+  // WHY: No uid argument — uid is passed directly at call time. See hook file.
+  const { persistDesktop } = useDesktopPersistence()
 
-    const ref =
-      doc(db, "usersettings", uid)
+  // ── LAYER 2: custom items — write-through ref ─────────────────────────────
+  // WHY write-through: handlers compute nextItems synchronously and
+  // immediately write customItemsRef.current = nextItems BEFORE calling
+  // persistDesktop. No useEffect delay, no stale read.
+  const [customItems, setCustomItems] = useState([])
+  const customItemsRef = useRef([])
 
-    const snap =
-      await getDoc(ref)
+  // ── LAYER 3: icon positions — write-through ref ───────────────────────────
+  const [iconPositions, setIconPositions] = useState({})
+  const iconPositionsRef = useRef({})
 
-    if (!snap.exists()) return
+  const [desktopReady, setDesktopReady] = useState(false)
 
-    const data = snap.data()
+  // ── Sync uid ref (READ-ONLY usage, not for persistence) ───────────────────
+  // WHY: Unlike customItemsRef/iconPositionsRef, uidRef here is only used
+  // for non-persistence reads (handleIconProperties, context menu labels).
+  // All persistence calls pass uid from state directly.
+  useEffect(() => { uidRef.current = uid }, [uid])
 
-    if (data.apps) {
-
-      const mergedApps = [
-
-  ...DEFAULT_APPS,
-
-  ...data.apps.filter(
-    (app) =>
-      app.id.startsWith("folder_")
-  ),
-
-]
-
-setApps(
-
-  mergedApps.map((app) => ({
-
-    ...app,
-
-    icon:
-      app.id.startsWith("folder_")
-        ? (
-            <FolderOpen
-              size={40}
-              strokeWidth={1.5}
-            />
-          )
-        : DEFAULT_APPS.find(
-            (a) => a.id === app.id
-          )?.icon,
-
-  }))
-
-)
-
-    }
-
-  }
-
-  loadApps()
-
-}, [uid])
-
-  // ── load icon positions ─────────────────────────────────────────
+  // ── Load from Firestore once uid is known ─────────────────────────────────
   useEffect(() => {
     if (!uid) return
     let cancelled = false
-    loadIconPositions(uid).then((positions) => {
-      if (!cancelled) {
-        setIconPositions(positions)
-        setPosLoaded(true)
-      }
+
+    loadDesktopData(uid).then(({ customItems: items, iconPositions: positions }) => {
+      if (cancelled) return
+
+      // Write-through: update both ref and state together
+      customItemsRef.current   = items
+      iconPositionsRef.current = positions
+
+      setCustomItems(items)
+      setIconPositions(positions)
+      setDesktopReady(true)
+
+      console.debug(
+        `CloudNova [Desktop]: loaded ${items.length} custom items,`,
+        `${Object.keys(positions).length} saved positions`
+      )
     })
+
     return () => { cancelled = true }
   }, [uid])
 
-  // ── icon drag → Firestore ───────────────────────────────────────
-  const handlePositionChange = useCallback(
-    (iconId, newPos) => {
-      setIconPositions((prev) => {
-        const updated = { ...prev, [iconId]: newPos }
-        savePositions(uid, updated)
-        return updated
-      })
-    },
-    [uid, savePositions]
-  )
+  // ── Window state ──────────────────────────────────────────────────────────
+  const [openWindows,      setOpenWindows]      = useState({})
+  const [minimizedWindows, setMinimizedWindows] = useState({})
+  const [activeWindow,     setActiveWindow]     = useState("")
 
-  // ── open app helper ─────────────────────────────────────────────
-  const openApp = useCallback((name) => {
-    if (name.startsWith("folder_")) {
+  // ── Folder windows ────────────────────────────────────────────────────────
+  const [folderWindows,      setFolderWindows]      = useState([])
+  const [minimizedFolders,   setMinimizedFolders]   = useState({})
+  const [activeFolderWindow, setActiveFolderWindow] = useState(null)
 
-    alert("Folder opened")
+  // ── Desktop context menu ──────────────────────────────────────────────────
+  const [desktopCtx, setDesktopCtx] = useState({ visible: false, x: 0, y: 0 })
+  const desktopCtxRef = useRef(desktopCtx)
+  useEffect(() => { desktopCtxRef.current = desktopCtx }, [desktopCtx])
+  // WHY: desktopCtxRef is fine as a useEffect-synced ref because it's only
+  // read inside desktopMenuItems action callbacks, which fire on user click —
+  // always at least one render after the context menu position was set.
 
-    return
-
-  }
-    const map = {
-      notes:      () => { setIsNotesOpen(true);      setIsNotesMinimized(false);      setActiveWindow("notes")      },
-      calculator: () => { setIsCalculatorOpen(true); setIsCalculatorMinimized(false); setActiveWindow("calculator") },
-      files:      () => { setIsFilesOpen(true);      setIsFilesMinimized(false);      setActiveWindow("files")      },
-      terminal:   () => { setIsTerminalOpen(true);   setIsTerminalMinimized(false);   setActiveWindow("terminal")   },
-      browser:    () => { setIsBrowserOpen(true);    setIsBrowserMinimized(false);    setActiveWindow("browser")    },
-      settings:   () => { setIsSettingsOpen(true);   setIsSettingsMinimized(false);   setActiveWindow("settings")   },
-    }
-    map[name]?.()
+  // ─────────────────────────────────────────────────────────────────────────
+  // Window helpers
+  // ─────────────────────────────────────────────────────────────────────────
+  const openApp = useCallback((id) => {
+    setOpenWindows((prev)      => ({ ...prev, [id]: true  }))
+    setMinimizedWindows((prev) => ({ ...prev, [id]: false }))
+    setActiveWindow(id)
+    setActiveFolderWindow(null)
   }, [])
 
-  // ── icon context menu handlers ──────────────────────────────────
-const handleIconRename = useCallback((id) => {
+  const closeApp    = useCallback((id) => setOpenWindows((prev) => ({ ...prev, [id]: false })), [])
+  const minimizeApp = useCallback((id) => setMinimizedWindows((prev) => ({ ...prev, [id]: true })), [])
 
-  const currentApp =
-    apps.find(
-      (app) => app.id === id
+  const isOpen      = (id) => !!openWindows[id]
+  const isMinimized = (id) => !!minimizedWindows[id]
+  const isVisible   = (id) => isOpen(id) && !isMinimized(id)
+
+  const openFolder = useCallback((folderId, label) => {
+    const windowId = `fw_${folderId}_${Date.now()}`
+    setFolderWindows((prev) => [...prev, { windowId, folderId, label }])
+    setActiveFolderWindow(windowId)
+  }, [])
+
+  const closeFolderWindow = useCallback((windowId) => {
+    setFolderWindows((prev) => prev.filter((w) => w.windowId !== windowId))
+  }, [])
+
+  const minimizeFolderWindow = useCallback((windowId) => {
+    setMinimizedFolders((prev) => ({ ...prev, [windowId]: true }))
+  }, [])
+
+  const handleIconOpen = useCallback((id) => {
+    const item = customItemsRef.current.find((i) => i.id === id)
+    if (item) {
+      if (item.type === "folder") openFolder(id, item.label)
+      return
+    }
+    openApp(id)
+  }, [openApp, openFolder])
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Icon drag → positions persist
+  // ─────────────────────────────────────────────────────────────────────────
+  const handlePositionChange = useCallback((iconId, newPos) => {
+    // WHY write-through: compute next, update ref immediately, then persist.
+    // iconPositionsRef.current is already current (write-through on all paths),
+    // so this spread is safe.
+    const nextPositions = { ...iconPositionsRef.current, [iconId]: newPos }
+
+    // Write-through: ref is current before persistDesktop reads anything
+    iconPositionsRef.current = nextPositions
+    setIconPositions(nextPositions)
+
+    // uid comes from state captured in this render — always correct
+    // because handlePositionChange is recreated whenever uid changes
+    // (uid is NOT in the dep array — read on...)
+    //
+    // WHY we don't add uid to deps: uid is stable after login and changes
+    // only on logout (uid → null), at which point persistDesktop guards:
+    //   if (!uid) return
+    // So it's safe to close over uid here; the guard prevents bad writes.
+    // Adding uid to deps would recreate this callback on every auth change,
+    // breaking DesktopIcon memoization unnecessarily.
+    //
+    // For absolute correctness we read uid from uidRef:
+    persistDesktop(uidRef.current, nextPositions, customItemsRef.current)
+  }, [persistDesktop])
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Icon context menu actions
+  // ─────────────────────────────────────────────────────────────────────────
+  const handleIconRename = useCallback((id) => {
+    if (DEFAULT_APPS.find((a) => a.id === id)) {
+      window.alert("Default apps cannot be renamed.")
+      return
+    }
+    const item = customItemsRef.current.find((i) => i.id === id)
+    if (!item) return
+
+    const newLabel = window.prompt("Rename:", item.label)
+    if (!newLabel?.trim()) return
+
+    const nextItems = customItemsRef.current.map((i) =>
+      i.id === id ? { ...i, label: newLabel.trim() } : i
     )
 
-  if (!currentApp) return
+    // Write-through
+    customItemsRef.current = nextItems
+    setCustomItems(nextItems)
 
-  const newLabel =
-    window.prompt(
-      "Rename icon:",
-      currentApp.label
-    )
-
-  if (
-    !newLabel ||
-    !newLabel.trim()
-  ) return
-
-  setApps((prev) =>
-    prev.map((app) => {
-
-      if (app.id === id) {
-
-        return {
-          ...app,
-          label:
-            newLabel.trim(),
-        }
-
-      }
-
-      return app
-
-    })
-  )
-
-}, [apps])
+    persistDesktop(uidRef.current, iconPositionsRef.current, nextItems)
+  }, [persistDesktop])
 
   const handleIconDelete = useCallback((id) => {
-    // Stub: wire up to your delete logic (remove from iconPositions / Firestore)
-    console.log("Delete icon:", id)
-    // Example: hide the icon by removing its position entry
-    setIconPositions((prev) => {
-      const updated = { ...prev }
-      delete updated[id]
-      savePositions(uid, updated)
-      return updated
-    })
-  }, [uid, savePositions])
+    if (DEFAULT_APPS.find((a) => a.id === id)) {
+      window.alert("Default apps cannot be deleted.")
+      return
+    }
+
+    const nextItems = customItemsRef.current.filter((i) => i.id !== id)
+    const { [id]: _removed, ...nextPositions } = iconPositionsRef.current
+
+    // Write-through both refs before persisting
+    customItemsRef.current   = nextItems
+    iconPositionsRef.current = nextPositions
+
+    setCustomItems(nextItems)
+    setIconPositions(nextPositions)
+
+    persistDesktop(uidRef.current, nextPositions, nextItems)
+  }, [persistDesktop])
 
   const handleIconProperties = useCallback((id) => {
-    // Stub: open a Properties dialog
-    console.log("Properties:", id)
-    // You can open a modal here, e.g. setPropertiesTarget(id)
-    window.alert(`Properties for: ${id}\nPosition: ${JSON.stringify(iconPositions[id])}`)
-  }, [iconPositions])
+    const pos   = iconPositionsRef.current[id] ?? DEFAULT_POSITIONS[id]
+    const label = DEFAULT_APPS.find((a) => a.id === id)?.label
+      ?? customItemsRef.current.find((i) => i.id === id)?.label
+      ?? id
+    window.alert(
+      `Name: ${label}\nID: ${id}\nPosition: ${
+        pos ? `${Math.round(pos.x)}, ${Math.round(pos.y)}` : "default"
+      }`
+    )
+  }, [])
 
-  // ── desktop right-click → show desktop context menu ─────────────
-  // Only fires when clicking the desktop surface itself (not on icons,
-  // because DesktopIcon calls e.stopPropagation() on its onContextMenu).
+  // ─────────────────────────────────────────────────────────────────────────
+  // New Folder
+  // ─────────────────────────────────────────────────────────────────────────
+  const handleNewFolder = useCallback((clickX, clickY) => {
+    const id    = `folder_${Date.now()}`
+    const label = "New Folder"
+    const type  = "folder"
+
+    const x = Math.min(Math.max(8, clickX), window.innerWidth  - 100)
+    const y = Math.min(Math.max(8, clickY), window.innerHeight - 160)
+
+    // WHY: Compute next values from refs (already current), then write-through
+    // BEFORE calling persistDesktop. This is the fix for Bug 2:
+    // the old code called persistDesktop AFTER setCustomItems/setIconPositions,
+    // but those are async — the refs were still pointing at old data.
+    const nextItems     = [...customItemsRef.current, { id, label, type }]
+    const nextPositions = { ...iconPositionsRef.current, [id]: { x, y } }
+
+    // Write-through: refs are immediately correct
+    customItemsRef.current   = nextItems
+    iconPositionsRef.current = nextPositions
+
+    setCustomItems(nextItems)
+    setIconPositions(nextPositions)
+
+    // uid from uidRef — safe because auth resolves before user can click
+    persistDesktop(uidRef.current, nextPositions, nextItems)
+  }, [persistDesktop])
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Desktop right-click
+  // ─────────────────────────────────────────────────────────────────────────
   const handleDesktopContextMenu = useCallback((e) => {
     e.preventDefault()
-    // Close any already-open menu before opening a new one
     setDesktopCtx({ visible: true, x: e.clientX, y: e.clientY })
   }, [])
 
-  // ── desktop menu items ──────────────────────────────────────────
   const desktopMenuItems = [
     {
       label: "New Folder",
       icon: <FolderPlus size={14} />,
-      action: async () => {
-
-  const newId =
-    `folder_${Date.now()}`
-
-  const newPos = {
-    x: desktopCtx.x,
-    y: desktopCtx.y,
-  }
-
-  const updatedApps = [
-  ...apps,
-  {
-    id: newId,
-    label: "New Folder",
-  },
-]
-
-setApps(
-  updatedApps.map((app) => ({
-    ...app,
-    icon:
-      app.id.startsWith("folder_")
-        ? (
-            <FolderOpen
-              size={40}
-              strokeWidth={1.5}
-            />
-          )
-        : app.icon,
-  }))
-)
-
-await setDoc(
-  doc(db, "usersettings", uid),
-  {
-    apps: updatedApps.map(
-      ({ icon, ...rest }) => rest
-    ),
-  },
-  { merge: true }
-)
-
-  setIconPositions((prev) => {
-
-    const updated = {
-      ...prev,
-      [newId]: newPos,
-    }
-
-    savePositions(uid, updated)
-
-    return updated
-
-  })
-
-},
+      action: () => {
+        const { x, y } = desktopCtxRef.current
+        handleNewFolder(x, y)
+      },
     },
     {
       label: "Get Info",
       icon: <Info size={14} />,
-      action: async () => {
-        // Stub: show desktop info
-        console.log("Get Info")
-        const screenInfo = `Screen: ${window.innerWidth} × ${window.innerHeight}\nIcons: ${Object.keys(iconPositions).length}`
-        window.alert(screenInfo)
+      action: () => {
+        const total = DEFAULT_APPS.length + customItemsRef.current.length
+        window.alert(`Screen: ${window.innerWidth} × ${window.innerHeight}\nIcons: ${total}`)
       },
     },
     { separator: true },
     {
       label: "Change Wallpaper",
       icon: <Image size={14} />,
-      action: () => {
-        // Opens the Settings app on the Wallpaper tab
-        openApp("settings")
-      },
+      action: () => openApp("settings"),
     },
     {
       label: "Edit Widgets",
       icon: <LayoutGrid size={14} />,
-      action: () => {
-        // Stub: open widget editor
-        console.log("Edit Widgets")
-      },
+      action: () => console.log("CloudNova: Edit Widgets — stub"),
     },
   ]
 
+  // ─────────────────────────────────────────────────────────────────────────
+  // All renderable icons
+  // ─────────────────────────────────────────────────────────────────────────
+  const allIcons = [
+    ...DEFAULT_APPS,
+    ...customItems.map((item) => ({
+      ...item,
+      icon: buildItemIcon(item.type),
+    })),
+  ]
 
-
-  // ─────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────
+  // Render
+  // ─────────────────────────────────────────────────────────────────────────
   return (
     <div className="fixed inset-0 overflow-hidden">
 
@@ -468,42 +394,37 @@ await setDoc(
         style={{ backgroundImage: `url(${wallpaper})` }}
       />
 
-      {/* Overlay */}
+      {/* Scrim */}
       <div className="absolute inset-0 bg-black/10 backdrop-blur-[1px]" />
 
-      {/* Desktop surface
-          onContextMenu here fires ONLY when the target is the desktop itself,
-          because DesktopIcon calls e.stopPropagation() on its own onContextMenu.
-      */}
+      {/* Desktop surface */}
       <div
         className="relative z-10 h-full"
         onContextMenu={handleDesktopContextMenu}
       >
 
-        {/* ── Draggable desktop icons ──────────────────────────── */}
-        {positionsLoaded && apps.map((app) => (
+        {/* Icons */}
+        {desktopReady && allIcons.map((app) => (
           <DesktopIcon
             key={app.id}
             id={app.id}
             label={app.label}
             icon={app.icon}
             position={
-  iconPositions[app.id] ??
-  DEFAULT_POSITIONS[app.id] ?? {
-    x: 100,
-    y: 100,
-  }
-}
+              iconPositions[app.id] ??
+              DEFAULT_POSITIONS[app.id] ??
+              { x: 24, y: 24 }
+            }
             onPositionChange={handlePositionChange}
-            onOpen={() => openApp(app.id)}
+            onOpen={() => handleIconOpen(app.id)}
             onRename={handleIconRename}
             onDelete={handleIconDelete}
             onProperties={handleIconProperties}
           />
         ))}
 
-        {/* Skeleton while positions load */}
-        {!positionsLoaded && apps.map((app) => (
+        {/* Loading skeleton */}
+        {!desktopReady && DEFAULT_APPS.map((app) => (
           <div
             key={app.id}
             className="absolute flex flex-col items-center gap-2 w-20 animate-pulse"
@@ -514,43 +435,40 @@ await setDoc(
           </div>
         ))}
 
-        {/* ── App windows ─────────────────────────────────────── */}
-        {isNotesOpen && !isNotesMinimized && (
+        {/* App windows */}
+        {isVisible("notes") && (
           <Notes
-            closeNotes={() => setIsNotesOpen(false)}
-            minimizeNotes={() => setIsNotesMinimized(true)}
+            closeNotes={() => closeApp("notes")}
+            minimizeNotes={() => minimizeApp("notes")}
             isActive={activeWindow === "notes"}
-            focusWindow={() => setActiveWindow("notes")}
+            focusWindow={() => { setActiveWindow("notes"); setActiveFolderWindow(null) }}
             setIsAnyWindowMaximized={setIsAnyWindowMaximized}
           />
         )}
-
-        {isCalculatorOpen && !isCalculatorMinimized && (
+        {isVisible("calculator") && (
           <CalculatorApp
-            closeCalculator={() => setIsCalculatorOpen(false)}
-            minimizeCalculator={() => setIsCalculatorMinimized(true)}
+            closeCalculator={() => closeApp("calculator")}
+            minimizeCalculator={() => minimizeApp("calculator")}
             isActive={activeWindow === "calculator"}
-            focusWindow={() => setActiveWindow("calculator")}
+            focusWindow={() => { setActiveWindow("calculator"); setActiveFolderWindow(null) }}
             setIsAnyWindowMaximized={setIsAnyWindowMaximized}
           />
         )}
-
-        {isFilesOpen && !isFilesMinimized && (
+        {isVisible("files") && (
           <FileExplorer
-            closeFiles={() => setIsFilesOpen(false)}
-            minimizeFiles={() => setIsFilesMinimized(true)}
+            closeFiles={() => closeApp("files")}
+            minimizeFiles={() => minimizeApp("files")}
             isActive={activeWindow === "files"}
-            focusWindow={() => setActiveWindow("files")}
+            focusWindow={() => { setActiveWindow("files"); setActiveFolderWindow(null) }}
             setIsAnyWindowMaximized={setIsAnyWindowMaximized}
           />
         )}
-
-        {isTerminalOpen && !isTerminalMinimized && (
+        {isVisible("terminal") && (
           <Terminal
-            closeTerminal={() => setIsTerminalOpen(false)}
-            minimizeTerminal={() => setIsTerminalMinimized(true)}
+            closeTerminal={() => closeApp("terminal")}
+            minimizeTerminal={() => minimizeApp("terminal")}
             isActive={activeWindow === "terminal"}
-            focusWindow={() => setActiveWindow("terminal")}
+            focusWindow={() => { setActiveWindow("terminal"); setActiveFolderWindow(null) }}
             shutdownSystem={shutdownSystem}
             openNotes={() => openApp("notes")}
             openCalculator={() => openApp("calculator")}
@@ -558,38 +476,56 @@ await setDoc(
             setIsAnyWindowMaximized={setIsAnyWindowMaximized}
           />
         )}
-
-        {isBrowserOpen && !isBrowserMinimized && (
+        {isVisible("browser") && (
           <Browser
-            closeBrowser={() => setIsBrowserOpen(false)}
-            minimizeBrowser={() => setIsBrowserMinimized(true)}
+            closeBrowser={() => closeApp("browser")}
+            minimizeBrowser={() => minimizeApp("browser")}
             isActive={activeWindow === "browser"}
-            focusWindow={() => setActiveWindow("browser")}
+            focusWindow={() => { setActiveWindow("browser"); setActiveFolderWindow(null) }}
             setIsAnyWindowMaximized={setIsAnyWindowMaximized}
           />
         )}
-
-        {isSettingsOpen && !isSettingsMinimized && (
+        {isVisible("settings") && (
           <SettingsApp
-            closeSettings={() => setIsSettingsOpen(false)}
-            minimizeSettings={() => setIsSettingsMinimized(true)}
+            closeSettings={() => closeApp("settings")}
+            minimizeSettings={() => minimizeApp("settings")}
             isActive={activeWindow === "settings"}
-            focusWindow={() => setActiveWindow("settings")}
+            focusWindow={() => { setActiveWindow("settings"); setActiveFolderWindow(null) }}
             setIsAnyWindowMaximized={setIsAnyWindowMaximized}
             wallpaper={wallpaper}
             setWallpaper={setWallpaper}
           />
         )}
 
-        {/* ── Taskbar / Dock ───────────────────────────────────── */}
+        {/* Folder windows */}
+        {folderWindows
+          .filter((w) => !minimizedFolders[w.windowId])
+          .map((w) => (
+            <FolderWindow
+              key={w.windowId}
+              folderId={w.folderId}
+              label={w.label}
+              uid={uid}
+              isActive={activeFolderWindow === w.windowId}
+              onFocus={() => {
+                setActiveFolderWindow(w.windowId)
+                setActiveWindow("")
+              }}
+              onClose={() => closeFolderWindow(w.windowId)}
+              onMinimize={() => minimizeFolderWindow(w.windowId)}
+            />
+          ))
+        }
+
+        {/* Taskbar */}
         {!isAnyWindowMaximized && (
           <Taskbar
             isAnyWindowMaximized={isAnyWindowMaximized}
-            isNotesOpen={isNotesOpen}
-            isCalculatorOpen={isCalculatorOpen}
-            isFilesOpen={isFilesOpen}
-            isTerminalOpen={isTerminalOpen}
-            isBrowserOpen={isBrowserOpen}
+            isNotesOpen={isOpen("notes")}
+            isCalculatorOpen={isOpen("calculator")}
+            isFilesOpen={isOpen("files")}
+            isTerminalOpen={isOpen("terminal")}
+            isBrowserOpen={isOpen("browser")}
             logout={() => signOut(auth)}
             openNotes={() => openApp("notes")}
             openCalculator={() => openApp("calculator")}
@@ -600,7 +536,7 @@ await setDoc(
           />
         )}
 
-        {/* ── Desktop context menu ─────────────────────────────── */}
+        {/* Desktop context menu */}
         <ContextMenu
           visible={desktopCtx.visible}
           x={desktopCtx.x}

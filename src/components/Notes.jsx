@@ -77,8 +77,8 @@ function Notes(props) {
         x: 160,
         y: 80,
       }}
-      width="500px"
-      height="350px"
+      width="40vw"
+      height="50vh"
     >
 
       <textarea
