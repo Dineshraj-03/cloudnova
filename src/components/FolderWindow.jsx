@@ -1,73 +1,79 @@
 /**
  * FolderWindow.jsx — CloudNova
  *
- * Phase 2: macOS Finder-style folder window with glassmorphism UI.
+ * Phases 2–5: macOS Finder-style folder window.
  *
- * Props
- * ─────
- * folderId   string        Firestore folder ID
- * label      string        Display name shown in title bar
- * uid        string        Current user's Firebase UID
- * onClose    () => void
- * onMinimize () => void
- * isActive   bool
- * onFocus    () => void
+ * ─────────────────────────────────────────────────────────────────────────────
+ * FIXES (this revision)
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Fix 1 — Toolbar UploadButton
+ *   The hidden <input> is now rendered directly in FolderWindow with a stable
+ *   id ("upload-input-{folderId}") and a ref (uploadInputRef).
+ *   UploadButton no longer owns its own input; it receives a plain onClick
+ *   prop and just triggers uploadInputRef.current.click().
+ *   This sidesteps any pointer-capture / stop-propagation concern entirely.
  *
- * Architecture
- * ────────────
- * - Loads files + sub-folders from Firestore via filesystem.js helpers
- * - Draggable via pointer events (same pattern as other CloudNova windows)
- * - Empty state shown when folder has no contents
- * - Ready for Phase 4 (notes inside folders) — double-click a note file
- *   to open it in a NoteEditor (stub provided)
+ * Fix 2 — Sidebar Upload button
+ *   Now also calls uploadInputRef.current?.click() — the same real input —
+ *   instead of the broken document.getElementById lookup that previously
+ *   targeted a non-existent id.
+ * ─────────────────────────────────────────────────────────────────────────────
  */
 
-import { useState, useEffect, useRef, useCallback } from "react"
+import { useState, useRef, useCallback } from "react"
 import {
-  X,
-  Minus,
   Folder,
-  FileText,
-  Image,
-  File,
   Plus,
   RefreshCw,
   ChevronLeft,
-  ChevronRight,
   LayoutGrid,
   List,
+  Upload,
 } from "lucide-react"
-import { getFiles, getFolders, createFile, createFolder } from "./filesystem"
 
-// ─────────────────────────────────────────────────────────────────────────────
-// File type → icon mapping
-// ─────────────────────────────────────────────────────────────────────────────
-function FileIcon({ type, size = 32 }) {
-  const props = { size, strokeWidth: 1.5, className: "text-white/70" }
-  switch (type) {
-    case "note":    return <FileText  {...props} className="text-yellow-300/80" />
-    case "image":   return <Image     {...props} className="text-blue-300/80" />
-    case "folder":  return <Folder    {...props} className="text-amber-300/80" />
-    default:        return <File      {...props} />
-  }
-}
+import { useFolderContents }  from "./hooks/useFolderContents"
+import { useFileUpload }      from "./hooks/useFileUpload"
+import { FileCard }           from "./FileCard"
+import {
+  DropOverlay,
+  UploadProgressPanel,
+  UploadButton,
+}                             from "./UploadZone"
+import ImageViewer            from "./viewers/ImageViewer"
+import PDFViewer              from "./viewers/PDFViewer"
+import VideoPlayer            from "./viewers/VideoPlayer"
+import {
+  createFile,
+  createFolder,
+  renameFile,
+  renameFolder,
+  deleteFile,
+  deleteFolder,
+} from "./filesystem"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FolderWindow
 // ─────────────────────────────────────────────────────────────────────────────
-function FolderWindow({ folderId, label, uid, onClose, onMinimize, isActive, onFocus }) {
-  // ── Window drag ────────────────────────────────────────────────────
+function FolderWindow({
+  folderId,
+  label,
+  uid,
+  onClose,
+  onMinimize,
+  isActive,
+  onFocus,
+  setIsAnyWindowMaximized,
+}) {
+  // ── Window drag ────────────────────────────────────────────────────────────
   const INITIAL = { x: 160, y: 80 }
-  const [pos,     setPos]     = useState(INITIAL)
-  const [size,    setSize]    = useState({ w: 680, h: 440 })
-  const dragRef   = useRef({ active: false })
-  const windowRef = useRef(null)
+  const [pos,  setPos]  = useState(INITIAL)
+  const dragRef         = useRef({ active: false })
 
   const onTitlePointerDown = useCallback((e) => {
     if (e.button !== 0) return
     e.currentTarget.setPointerCapture(e.pointerId)
     dragRef.current = {
-      active: true,
+      active:  true,
       startMX: e.clientX, startMY: e.clientY,
       startX:  pos.x,     startY:  pos.y,
     }
@@ -88,45 +94,133 @@ function FolderWindow({ folderId, label, uid, onClose, onMinimize, isActive, onF
     dragRef.current.active = false
   }, [])
 
-  // ── Filesystem state ────────────────────────────────────────────────
-  const [folders,  setFolders]  = useState([])
-  const [files,    setFiles]    = useState([])
-  const [loading,  setLoading]  = useState(true)
+  // ── View state ─────────────────────────────────────────────────────────────
   const [viewMode, setViewMode] = useState("grid") // "grid" | "list"
 
-  // Navigation stack: array of { folderId, label }
+  // ── Navigation stack: [{ folderId, label }, ...] ───────────────────────────
   const [navStack, setNavStack] = useState([{ folderId, label }])
   const current = navStack[navStack.length - 1]
 
-  const loadContents = useCallback(async () => {
-    if (!uid || !current.folderId) return
-    setLoading(true)
-    try {
-      const [f, fi] = await Promise.all([
-        getFolders(uid, current.folderId),
-        getFiles(uid, current.folderId),
-      ])
-      setFolders(f)
-      setFiles(fi)
-    } catch (err) {
-      console.error("CloudNova [FolderWindow] load:", err)
-    } finally {
-      setLoading(false)
+  // ── Folder contents ────────────────────────────────────────────────────────
+  const { allItems, loading, reload } = useFolderContents(uid, current.folderId)
+
+  // ── File upload ────────────────────────────────────────────────────────────
+  const { uploads, uploadFiles, cancelUpload, clearCompleted } = useFileUpload(
+    uid,
+    current.folderId,
+    reload
+  )
+
+  // ── Single shared hidden file input ───────────────────────────────────────
+  // FIX 1 + FIX 2: one <input> owned here, triggered by both the toolbar
+  // UploadButton and the sidebar shortcut. UploadButton.jsx no longer needs
+  // to manage its own input; it accepts an onClick prop instead.
+  const uploadInputRef = useRef(null)
+
+  const triggerUploadInput = useCallback(() => {
+    uploadInputRef.current?.click()
+  }, [])
+
+  const handleUploadInputChange = useCallback((e) => {
+    if (e.target.files?.length) {
+      uploadFiles(e.target.files)
+      // Reset so the same file(s) can be re-selected immediately
+      e.target.value = ""
     }
-  }, [uid, current.folderId])
+  }, [uploadFiles])
 
-  useEffect(() => { loadContents() }, [loadContents])
+  // ── Drag-and-drop onto window ───────────────────────────────────────────────
+  const [isDragging, setIsDragging] = useState(false)
+  const dragCounter = useRef(0)
 
-  // ── Navigation ──────────────────────────────────────────────────────
-  const openSubFolder = useCallback((subId, subLabel) => {
-    setNavStack((prev) => [...prev, { folderId: subId, label: subLabel }])
+  const handleDragOver = useCallback((e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    e.dataTransfer.dropEffect = "copy"
   }, [])
 
-  const goBack = useCallback(() => {
-    setNavStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))
+  const handleDragEnter = useCallback((e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current += 1
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDragging(true)
+    }
   }, [])
 
-  // ── Create new note inside this folder ─────────────────────────────
+  const handleDragLeave = useCallback((e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current -= 1
+    if (dragCounter.current === 0) setIsDragging(false)
+  }, [])
+
+  const handleDrop = useCallback((e) => {
+    e.preventDefault()
+    e.stopPropagation()
+    dragCounter.current = 0
+    setIsDragging(false)
+    const files = e.dataTransfer.files
+    if (files?.length) uploadFiles(files)
+  }, [uploadFiles])
+
+  // ── Open viewer windows ────────────────────────────────────────────────────
+  const [openViewers, setOpenViewers] = useState([])
+  const [activeViewer, setActiveViewer] = useState(null)
+
+  const openFile = useCallback((item) => {
+    if (item.itemType === "folder") {
+      setNavStack((prev) => [...prev, { folderId: item.id, label: item.label }])
+      return
+    }
+
+    if (item.itemType === "note") {
+      const newContent = window.prompt(`Edit note: ${item.name}`, item.content ?? "")
+      if (newContent !== null) {
+        import("./filesystem").then(({ updateFileContent }) => {
+          updateFileContent(uid, item.id, newContent).then(reload)
+        })
+      }
+      return
+    }
+
+    const viewerId = `viewer_${item.id}_${Date.now()}`
+    setOpenViewers((prev) => [...prev, { id: viewerId, type: item.itemType, file: item }])
+    setActiveViewer(viewerId)
+  }, [uid, reload])
+
+  const closeViewer = useCallback((viewerId) => {
+    setOpenViewers((prev) => prev.filter((v) => v.id !== viewerId))
+  }, [])
+
+  // ── Item rename ────────────────────────────────────────────────────────────
+  const handleRename = useCallback(async (item) => {
+    const currentName = item.label ?? item.name ?? ""
+    const newName = window.prompt("Rename:", currentName)
+    if (!newName?.trim() || newName.trim() === currentName) return
+
+    if (item.itemType === "folder") {
+      await renameFolder(uid, item.id, newName.trim())
+    } else {
+      await renameFile(uid, item.id, newName.trim())
+    }
+    reload()
+  }, [uid, reload])
+
+  // ── Item delete ────────────────────────────────────────────────────────────
+  const handleDelete = useCallback(async (item) => {
+    const name = item.label ?? item.name ?? "this item"
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return
+
+    if (item.itemType === "folder") {
+      await deleteFolder(uid, item.id)
+    } else {
+      await deleteFile(uid, item.id, item.storagePath ?? null)
+    }
+    reload()
+  }, [uid, reload])
+
+  // ── Create new note ────────────────────────────────────────────────────────
   const handleNewNote = useCallback(async () => {
     if (!uid) return
     const name = window.prompt("Note name:", "Untitled Note")
@@ -137,83 +231,110 @@ function FolderWindow({ folderId, label, uid, onClose, onMinimize, isActive, onF
       folderId: current.folderId,
       content:  "",
     })
-    loadContents()
-  }, [uid, current.folderId, loadContents])
+    reload()
+  }, [uid, current.folderId, reload])
 
-  // ── Create sub-folder ────────────────────────────────────────────────
+  // ── Create sub-folder ──────────────────────────────────────────────────────
   const handleNewSubFolder = useCallback(async () => {
     if (!uid) return
     const name = window.prompt("Folder name:", "New Folder")
     if (!name?.trim()) return
     await createFolder(uid, name.trim(), current.folderId)
-    loadContents()
-  }, [uid, current.folderId, loadContents])
+    reload()
+  }, [uid, current.folderId, reload])
 
-  const allItems = [
-    ...folders.map((f) => ({ ...f, itemType: "folder" })),
-    ...files.map((f)   => ({ ...f, itemType: f.type })),
-  ]
+  // ── Navigation ─────────────────────────────────────────────────────────────
+  const goBack = useCallback(() => {
+    setNavStack((prev) => (prev.length > 1 ? prev.slice(0, -1) : prev))
+  }, [])
 
-  // ─────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   // Render
-  // ─────────────────────────────────────────────────────────────────────
+  // ─────────────────────────────────────────────────────────────────────────────
   return (
-    <div
-      ref={windowRef}
-      className="absolute select-none"
-      style={{
-        left:   pos.x,
-        top:    pos.y,
-        width:  size.w,
-        height: size.h,
-        zIndex: isActive ? 50 : 40,
-      }}
-      onPointerDown={onFocus}
-    >
-      <div
-        className="flex flex-col w-full h-full rounded-2xl overflow-hidden"
-        style={{
-          background:    "rgba(20, 20, 28, 0.82)",
-          backdropFilter:         "blur(32px) saturate(1.5)",
-          WebkitBackdropFilter:   "blur(32px) saturate(1.5)",
-          border:     isActive
-            ? "1px solid rgba(255,255,255,0.18)"
-            : "1px solid rgba(255,255,255,0.08)",
-          boxShadow: isActive
-            ? "0 32px 80px rgba(0,0,0,0.6), 0 0 0 0.5px rgba(255,255,255,0.06) inset"
-            : "0 16px 48px rgba(0,0,0,0.4)",
-          transition: "border 0.15s, box-shadow 0.15s",
-        }}
-      >
-        {/* ── Title bar ───────────────────────────────────────────── */}
-        <div
-          className="flex items-center gap-3 px-4 py-3 cursor-default shrink-0"
-          style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}
-          onPointerDown={onTitlePointerDown}
-          onPointerMove={onTitlePointerMove}
-          onPointerUp={onTitlePointerUp}
-        >
-          {/* Traffic lights */}
-          <div className="flex items-center gap-1.5">
-            <button
-              className="w-3 h-3 rounded-full bg-red-400 hover:bg-red-300 transition-colors"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={onClose}
-            />
-            <button
-              className="w-3 h-3 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={onMinimize}
-            />
-            {/* Green button — resize stub */}
-            <button
-              className="w-3 h-3 rounded-full bg-green-400 hover:bg-green-300 transition-colors"
-              onPointerDown={(e) => e.stopPropagation()}
-            />
-          </div>
+    <>
+      {/*
+        Single shared hidden file input.
+        Both the toolbar UploadButton and the sidebar shortcut call
+        triggerUploadInput(), which resolves to this element.
+        Placed outside the window div so pointer-capture on the title bar
+        cannot interfere with it.
+      */}
+      <input
+        ref={uploadInputRef}
+        type="file"
+        multiple
+        accept="image/*,video/*,application/pdf,.doc,.docx,.txt,.md"
+        className="hidden"
+        onChange={handleUploadInputChange}
+      />
 
-          {/* Back / forward */}
-          <div className="flex items-center gap-1 ml-1">
+      {/* ── Folder window ────────────────────────────────────────────────── */}
+      <div
+        className="absolute select-none"
+        style={{
+          left:   pos.x,
+          top:    pos.y,
+          width:  680,
+          height: 480,
+          zIndex: isActive ? 50 : 40,
+        }}
+        onPointerDown={onFocus}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        <div
+          className="flex flex-col w-full h-full rounded-2xl overflow-hidden relative"
+          style={{
+            background:           "rgba(20, 20, 28, 0.82)",
+            backdropFilter:       "blur(32px) saturate(1.5)",
+            WebkitBackdropFilter: "blur(32px) saturate(1.5)",
+            border: isActive
+              ? "1px solid rgba(255,255,255,0.18)"
+              : "1px solid rgba(255,255,255,0.08)",
+            boxShadow: isActive
+              ? "0 32px 80px rgba(0,0,0,0.6), 0 0 0 0.5px rgba(255,255,255,0.06) inset"
+              : "0 16px 48px rgba(0,0,0,0.4)",
+            transition: "border 0.15s, box-shadow 0.15s",
+          }}
+        >
+          {/* ── Drop overlay ───────────────────────────────────────────── */}
+          <DropOverlay
+            isDragging={isDragging}
+            onDragOver={handleDragOver}
+            onDragLeave={handleDragLeave}
+            onDrop={handleDrop}
+          />
+
+          {/* ── Title bar ─────────────────────────────────────────────── */}
+          <div
+            className="flex items-center gap-3 px-4 py-3 cursor-default shrink-0"
+            style={{ borderBottom: "1px solid rgba(255,255,255,0.07)" }}
+            onPointerDown={onTitlePointerDown}
+            onPointerMove={onTitlePointerMove}
+            onPointerUp={onTitlePointerUp}
+          >
+            {/* Traffic lights */}
+            <div className="flex items-center gap-1.5">
+              <button
+                className="w-3 h-3 rounded-full bg-red-400 hover:bg-red-300 transition-colors"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={onClose}
+              />
+              <button
+                className="w-3 h-3 rounded-full bg-yellow-400 hover:bg-yellow-300 transition-colors"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={onMinimize}
+              />
+              <button
+                className="w-3 h-3 rounded-full bg-green-400 hover:bg-green-300 transition-colors"
+                onPointerDown={(e) => e.stopPropagation()}
+              />
+            </div>
+
+            {/* Back button */}
             <button
               className={`p-1 rounded-md transition-colors ${
                 navStack.length > 1
@@ -226,154 +347,244 @@ function FolderWindow({ folderId, label, uid, onClose, onMinimize, isActive, onF
             >
               <ChevronLeft size={14} />
             </button>
-          </div>
 
-          {/* Breadcrumb title */}
-          <div className="flex-1 flex items-center gap-1 overflow-hidden">
-            <Folder size={14} className="text-amber-300/80 shrink-0" />
-            <span className="text-white/80 text-sm font-medium truncate">
-              {navStack.map((n, i) => (
-                <span key={n.folderId}>
-                  {i > 0 && <span className="text-white/30 mx-1">/</span>}
-                  <span
-                    className={
-                      i < navStack.length - 1
-                        ? "text-white/40 hover:text-white/70 cursor-pointer transition-colors"
-                        : "text-white/80"
-                    }
-                    onClick={() =>
-                      i < navStack.length - 1 &&
-                      setNavStack((prev) => prev.slice(0, i + 1))
-                    }
-                  >
-                    {n.label}
+            {/* Breadcrumb */}
+            <div className="flex-1 flex items-center gap-1 overflow-hidden">
+              <Folder size={14} className="text-amber-300/80 shrink-0" />
+              <span className="text-white/80 text-sm font-medium truncate">
+                {navStack.map((n, i) => (
+                  <span key={`${n.folderId}_${i}`}>
+                    {i > 0 && <span className="text-white/30 mx-1">/</span>}
+                    <span
+                      className={
+                        i < navStack.length - 1
+                          ? "text-white/40 hover:text-white/70 cursor-pointer transition-colors"
+                          : "text-white/80"
+                      }
+                      onClick={() =>
+                        i < navStack.length - 1 &&
+                        setNavStack((prev) => prev.slice(0, i + 1))
+                      }
+                    >
+                      {n.label}
+                    </span>
                   </span>
-                </span>
-              ))}
-            </span>
-          </div>
+                ))}
+              </span>
+            </div>
 
-          {/* Toolbar right */}
-          <div className="flex items-center gap-1 shrink-0" onPointerDown={(e) => e.stopPropagation()}>
-            <button
-              className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
-              onClick={loadContents}
-              title="Refresh"
-            >
-              <RefreshCw size={13} />
-            </button>
-            <button
-              className={`p-1.5 rounded-lg transition-colors ${
-                viewMode === "grid"
-                  ? "text-white bg-white/15"
-                  : "text-white/50 hover:text-white hover:bg-white/10"
-              }`}
-              onClick={() => setViewMode("grid")}
-              title="Grid view"
-            >
-              <LayoutGrid size={13} />
-            </button>
-            <button
-              className={`p-1.5 rounded-lg transition-colors ${
-                viewMode === "list"
-                  ? "text-white bg-white/15"
-                  : "text-white/50 hover:text-white hover:bg-white/10"
-              }`}
-              onClick={() => setViewMode("list")}
-              title="List view"
-            >
-              <List size={13} />
-            </button>
+            {/* Toolbar right */}
             <div
-              className="w-px h-4 mx-1"
-              style={{ background: "rgba(255,255,255,0.1)" }}
-            />
-            <button
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium
-                         text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-              onClick={handleNewNote}
-              title="New note"
+              className="flex items-center gap-1 shrink-0"
+              onPointerDown={(e) => e.stopPropagation()}
             >
-              <Plus size={12} />
-              Note
-            </button>
-            <button
-              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium
-                         text-white/70 hover:text-white hover:bg-white/10 transition-colors"
-              onClick={handleNewSubFolder}
-              title="New folder"
-            >
-              <Plus size={12} />
-              Folder
-            </button>
-          </div>
-        </div>
-
-        {/* ── Sidebar + Content ─────────────────────────────────── */}
-        <div className="flex flex-1 min-h-0">
-
-          {/* Sidebar */}
-          <div
-            className="w-36 shrink-0 flex flex-col gap-1 p-3"
-            style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}
-          >
-            <p className="text-[10px] font-semibold text-white/30 uppercase tracking-wider mb-1 px-2">
-              Favourites
-            </p>
-            {[
-              { label: "This Folder", icon: <Folder size={13} className="text-amber-300/70" /> },
-            ].map((item) => (
               <button
-                key={item.label}
+                className="p-1.5 rounded-lg text-white/50 hover:text-white hover:bg-white/10 transition-colors"
+                onClick={reload}
+                title="Refresh"
+              >
+                <RefreshCw size={13} />
+              </button>
+
+              {/* View toggle */}
+              <button
+                className={`p-1.5 rounded-lg transition-colors ${
+                  viewMode === "grid"
+                    ? "text-white bg-white/15"
+                    : "text-white/50 hover:text-white hover:bg-white/10"
+                }`}
+                onClick={() => setViewMode("grid")}
+                title="Grid view"
+              >
+                <LayoutGrid size={13} />
+              </button>
+              <button
+                className={`p-1.5 rounded-lg transition-colors ${
+                  viewMode === "list"
+                    ? "text-white bg-white/15"
+                    : "text-white/50 hover:text-white hover:bg-white/10"
+                }`}
+                onClick={() => setViewMode("list")}
+                title="List view"
+              >
+                <List size={13} />
+              </button>
+
+              <div className="w-px h-4 mx-1" style={{ background: "rgba(255,255,255,0.1)" }} />
+
+              {/*
+                FIX 1: UploadButton now receives onClick instead of onFiles.
+                It no longer manages its own hidden input — triggerUploadInput
+                points at the single shared input declared above.
+              */}
+              <UploadButton onClick={triggerUploadInput} />
+
+              {/* New note */}
+              <button
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium
+                           text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                onClick={handleNewNote}
+                title="New note"
+              >
+                <Plus size={12} />
+                Note
+              </button>
+
+              {/* New folder */}
+              <button
+                className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-medium
+                           text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+                onClick={handleNewSubFolder}
+                title="New folder"
+              >
+                <Plus size={12} />
+                Folder
+              </button>
+            </div>
+          </div>
+
+          {/* ── Sidebar + Content ─────────────────────────────────────── */}
+          <div className="flex flex-1 min-h-0">
+            {/* Sidebar */}
+            <div
+              className="w-36 shrink-0 flex flex-col gap-1 p-3"
+              style={{ borderRight: "1px solid rgba(255,255,255,0.06)" }}
+            >
+              <p className="text-[10px] font-semibold text-white/30 uppercase tracking-wider mb-1 px-2">
+                Favourites
+              </p>
+              <button
                 className="flex items-center gap-2 px-2 py-1.5 rounded-lg
                            text-xs text-white/60 hover:text-white hover:bg-white/10
                            transition-colors text-left w-full"
+                onClick={() => setNavStack([{ folderId, label }])}
               >
-                {item.icon}
-                {item.label}
+                <Folder size={13} className="text-amber-300/70" />
+                {label}
               </button>
-            ))}
+
+              {/*
+                FIX 2: calls triggerUploadInput() — the same ref-based handler
+                used by the toolbar button — instead of the broken
+                document.getElementById lookup.
+              */}
+              <button
+                className="flex items-center gap-2 px-2 py-1.5 rounded-lg
+                           text-xs text-white/40 hover:text-white/70 hover:bg-white/10
+                           transition-colors text-left w-full mt-auto"
+                onClick={triggerUploadInput}
+              >
+                <Upload size={13} />
+                Upload
+              </button>
+            </div>
+
+            {/* Main content */}
+            <div className="flex-1 overflow-auto p-4">
+              {loading ? (
+                <LoadingSkeleton viewMode={viewMode} />
+              ) : allItems.length === 0 ? (
+                <EmptyState
+                  onNewNote={handleNewNote}
+                  onNewFolder={handleNewSubFolder}
+                  onUpload={triggerUploadInput}
+                />
+              ) : viewMode === "grid" ? (
+                <div
+                  className="grid gap-3"
+                  style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))" }}
+                >
+                  {allItems.map((item) => (
+                    <FileCard
+                      key={item.id}
+                      item={item}
+                      viewMode="grid"
+                      onOpen={openFile}
+                      onRename={handleRename}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              ) : (
+                <div className="flex flex-col gap-0.5">
+                  {/* List header */}
+                  <div className="flex items-center gap-3 px-3 py-1.5 mb-1">
+                    <div className="w-8 shrink-0" />
+                    <span className="flex-1 text-[10px] font-semibold text-white/25 uppercase tracking-wider">Name</span>
+                    <span className="text-[10px] font-semibold text-white/25 uppercase tracking-wider w-16 text-right">Type</span>
+                    <span className="text-[10px] font-semibold text-white/25 uppercase tracking-wider w-16 text-right">Size</span>
+                  </div>
+                  {allItems.map((item) => (
+                    <FileCard
+                      key={item.id}
+                      item={item}
+                      viewMode="list"
+                      onOpen={openFile}
+                      onRename={handleRename}
+                      onDelete={handleDelete}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* Main content area */}
-          <div className="flex-1 overflow-auto p-4">
-            {loading ? (
-              <LoadingSkeleton viewMode={viewMode} />
-            ) : allItems.length === 0 ? (
-              <EmptyState onNewNote={handleNewNote} onNewFolder={handleNewSubFolder} />
-            ) : viewMode === "grid" ? (
-              <GridView
-                items={allItems}
-                onOpenFolder={openSubFolder}
-              />
-            ) : (
-              <ListView
-                items={allItems}
-                onOpenFolder={openSubFolder}
-              />
+          {/* ── Upload progress panel ──────────────────────────────────── */}
+          <UploadProgressPanel
+            uploads={uploads}
+            onCancel={cancelUpload}
+            onClear={clearCompleted}
+          />
+
+          {/* ── Status bar ─────────────────────────────────────────────── */}
+          <div
+            className="flex items-center justify-between px-4 py-1.5 shrink-0"
+            style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}
+          >
+            <span className="text-[11px] text-white/30">
+              {allItems.length} {allItems.length === 1 ? "item" : "items"}
+            </span>
+            {uploads.filter((u) => u.status === "uploading").length > 0 && (
+              <span className="text-[11px] text-blue-400/70">
+                Uploading {uploads.filter((u) => u.status === "uploading").length} file(s)…
+              </span>
             )}
           </div>
         </div>
-
-        {/* ── Status bar ────────────────────────────────────────── */}
-        <div
-          className="flex items-center px-4 py-1.5 shrink-0"
-          style={{ borderTop: "1px solid rgba(255,255,255,0.06)" }}
-        >
-          <span className="text-[11px] text-white/30">
-            {allItems.length} {allItems.length === 1 ? "item" : "items"}
-          </span>
-        </div>
       </div>
-    </div>
+
+      {/* ── Viewer windows ────────────────────────────────────────────── */}
+      {openViewers.map((viewer) => {
+        const commonProps = {
+          key:                    viewer.id,
+          file:                   viewer.file,
+          onClose:                () => closeViewer(viewer.id),
+          onMinimize:             () => closeViewer(viewer.id),
+          isActive:               activeViewer === viewer.id,
+          focusWindow:            () => setActiveViewer(viewer.id),
+          setIsAnyWindowMaximized,
+        }
+
+        switch (viewer.type) {
+          case "image":
+            return <ImageViewer {...commonProps} />
+          case "pdf":
+            return <PDFViewer {...commonProps} />
+          case "video":
+            return <VideoPlayer {...commonProps} />
+          default:
+            return null
+        }
+      })}
+    </>
   )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Sub-components
+// Sub-components (loading / empty)
 // ─────────────────────────────────────────────────────────────────────────────
 
-function EmptyState({ onNewNote, onNewFolder }) {
+function EmptyState({ onNewNote, onNewFolder, onUpload }) {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-4 text-center">
       <div
@@ -384,9 +595,11 @@ function EmptyState({ onNewNote, onNewFolder }) {
       </div>
       <div>
         <p className="text-white/40 text-sm font-medium">This folder is empty</p>
-        <p className="text-white/20 text-xs mt-1">Create a note or subfolder to get started</p>
+        <p className="text-white/20 text-xs mt-1">
+          Create a note, subfolder, or upload files
+        </p>
       </div>
-      <div className="flex gap-2">
+      <div className="flex gap-2 flex-wrap justify-center">
         <button
           onClick={onNewNote}
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
@@ -403,61 +616,15 @@ function EmptyState({ onNewNote, onNewFolder }) {
         >
           <Plus size={12} /> New Folder
         </button>
+        <button
+          onClick={onUpload}
+          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium
+                     text-white/60 hover:text-white transition-colors"
+          style={{ background: "rgba(255,255,255,0.08)" }}
+        >
+          <Upload size={12} /> Upload File
+        </button>
       </div>
-    </div>
-  )
-}
-
-function GridView({ items, onOpenFolder }) {
-  return (
-    <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(88px, 1fr))" }}>
-      {items.map((item) => (
-        <button
-          key={item.id}
-          className="flex flex-col items-center gap-2 p-2 rounded-xl
-                     hover:bg-white/10 active:bg-white/15 transition-colors
-                     cursor-default text-center group"
-          onDoubleClick={() =>
-            item.itemType === "folder" && onOpenFolder(item.id, item.label)
-          }
-        >
-          <div className="w-12 h-12 flex items-center justify-center rounded-xl
-                          group-hover:bg-white/5 transition-colors">
-            <FileIcon type={item.itemType} size={36} />
-          </div>
-          <span className="text-[11px] text-white/70 group-hover:text-white
-                           leading-tight max-w-full truncate transition-colors">
-            {item.label ?? item.name}
-          </span>
-        </button>
-      ))}
-    </div>
-  )
-}
-
-function ListView({ items, onOpenFolder }) {
-  return (
-    <div className="flex flex-col gap-0.5">
-      {items.map((item) => (
-        <button
-          key={item.id}
-          className="flex items-center gap-3 px-3 py-2 rounded-lg
-                     hover:bg-white/10 active:bg-white/15 transition-colors
-                     cursor-default text-left w-full group"
-          onDoubleClick={() =>
-            item.itemType === "folder" && onOpenFolder(item.id, item.label)
-          }
-        >
-          <FileIcon type={item.itemType} size={18} />
-          <span className="flex-1 text-xs text-white/70 group-hover:text-white
-                           truncate transition-colors">
-            {item.label ?? item.name}
-          </span>
-          <span className="text-[10px] text-white/25 shrink-0">
-            {item.itemType}
-          </span>
-        </button>
-      ))}
     </div>
   )
 }
@@ -466,7 +633,7 @@ function LoadingSkeleton({ viewMode }) {
   const count = 6
   if (viewMode === "grid") {
     return (
-      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(88px, 1fr))" }}>
+      <div className="grid gap-3" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(96px, 1fr))" }}>
         {Array.from({ length: count }).map((_, i) => (
           <div key={i} className="flex flex-col items-center gap-2 p-2 animate-pulse">
             <div className="w-12 h-12 rounded-xl bg-white/10" />
@@ -480,8 +647,9 @@ function LoadingSkeleton({ viewMode }) {
     <div className="flex flex-col gap-0.5">
       {Array.from({ length: count }).map((_, i) => (
         <div key={i} className="flex items-center gap-3 px-3 py-2 animate-pulse">
-          <div className="w-4 h-4 rounded bg-white/10 shrink-0" />
+          <div className="w-8 h-8 rounded-lg bg-white/10 shrink-0" />
           <div className="flex-1 h-2.5 rounded bg-white/10" />
+          <div className="w-12 h-2 rounded bg-white/8" />
         </div>
       ))}
     </div>
