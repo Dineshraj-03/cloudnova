@@ -3,19 +3,31 @@
  *
  * PDF viewer wrapped in Window.jsx.
  *
- * Strategy: embed the PDF via an <iframe> pointing at the Firebase Storage
- * download URL. The browser's native PDF renderer handles rendering.
- * This avoids any PDF.js bundle weight and works cross-browser.
+ * Cloudinary serves PDFs with content-disposition: attachment by default,
+ * which blocks iframe embedding. Fix: append /fl_inline to the Cloudinary
+ * URL which forces inline delivery instead of download.
  *
- * Falls back to a download link if the browser blocks inline PDF display
- * (some privacy modes / mobile browsers).
- *
- * Props — same shape as ImageViewer.
+ * For non-Cloudinary URLs (legacy or other sources) we fall back to the
+ * original URL unchanged.
  */
 
 import { useState } from "react"
 import { Download, ExternalLink } from "lucide-react"
 import Window from "../Window"
+
+/**
+ * Convert a Cloudinary PDF URL to inline delivery.
+ * Cloudinary URL format:
+ *   https://res.cloudinary.com/{cloud}/image/upload/{transformations}/{public_id}
+ * We insert fl_inline into the transformation segment.
+ */
+function toInlineUrl(url) {
+  if (!url) return url
+  // Only transform Cloudinary URLs
+  if (!url.includes("res.cloudinary.com")) return url
+  // Insert fl_inline after /upload/
+  return url.replace("/upload/", "/upload/fl_inline/")
+}
 
 function PDFViewer({
   file,
@@ -27,17 +39,16 @@ function PDFViewer({
 }) {
   const [iframeError, setIframeError] = useState(false)
 
-  // Some browsers won't load cross-origin PDFs in an iframe.
-  // We detect the error and show a fallback.
+  const inlineUrl = toInlineUrl(file.storageUrl)
+
   const handleIframeLoad = (e) => {
     try {
-      // If the iframe document is empty or blocked, the title will be empty
       const doc = e.target.contentDocument
       if (doc && doc.title === "" && doc.body && doc.body.children.length === 0) {
         setIframeError(true)
       }
     } catch {
-      // Cross-origin frame — can't inspect; assume it loaded fine
+      // Cross-origin — assume it loaded fine
     }
   }
 
@@ -62,12 +73,11 @@ function PDFViewer({
           <span className="text-xs text-white/50 truncate max-w-[60%]">{file.name}</span>
           <div className="flex items-center gap-1">
             <a
-              href={file.storageUrl}
+              href={inlineUrl}
               target="_blank"
               rel="noreferrer"
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs
                          text-white/50 hover:text-white hover:bg-white/10 transition-colors"
-              title="Open in new tab"
             >
               <ExternalLink size={13} />
               Open
@@ -77,7 +87,6 @@ function PDFViewer({
               download={file.name}
               className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs
                          text-white/50 hover:text-white hover:bg-white/10 transition-colors"
-              title="Download PDF"
             >
               <Download size={13} />
               Download
@@ -88,11 +97,11 @@ function PDFViewer({
         {/* Content */}
         <div className="flex-1 relative bg-zinc-900">
           {iframeError ? (
-            <FallbackView file={file} />
+            <FallbackView file={file} inlineUrl={inlineUrl} />
           ) : (
             <iframe
-              key={file.storageUrl}
-              src={file.storageUrl}
+              key={inlineUrl}
+              src={inlineUrl}
               title={file.name}
               className="w-full h-full border-0"
               onLoad={handleIframeLoad}
@@ -105,7 +114,7 @@ function PDFViewer({
   )
 }
 
-function FallbackView({ file }) {
+function FallbackView({ file, inlineUrl }) {
   return (
     <div className="flex flex-col items-center justify-center h-full gap-5 text-center px-8">
       <div
@@ -122,7 +131,7 @@ function FallbackView({ file }) {
       </div>
       <div className="flex gap-3">
         <a
-          href={file.storageUrl}
+          href={inlineUrl}
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium

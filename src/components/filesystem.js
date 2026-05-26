@@ -1,53 +1,36 @@
 /**
  * filesystem.js — CloudNova
  *
- * Phase 3: Firestore filesystem schema + helper functions
+ * Firestore filesystem schema + helper functions.
+ * Storage backend: Cloudinary (free tier, no credit card required).
+ *
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Cloudinary deletion
+ * ─────────────────────────────────────────────────────────────────────────────
+ * Cloudinary's unsigned upload preset does NOT allow client-side deletion —
+ * the Delete API requires an API secret which must never be in client code.
+ *
+ * Safe approach used here:
+ *   - On delete, we call Cloudinary's "invalidate" via a signed URL — but
+ *     since we have no server, we instead mark the file deleted in Firestore
+ *     and remove the Firestore record. The Cloudinary asset remains on their
+ *     CDN but is no longer referenced anywhere in the app.
+ *   - For a production app, a Firebase Cloud Function would handle actual
+ *     Cloudinary deletion. For dev/free tier this is acceptable.
+ *   - The storagePath (public_id) is preserved in Firestore until deletion
+ *     so a future server-side cleanup job can remove orphaned assets.
  *
  * ─────────────────────────────────────────────────────────────────────────────
  * COLLECTIONS
  * ─────────────────────────────────────────────────────────────────────────────
  *
  * users/{uid}/folders/{folderId}
- * ┌───────────────┬──────────────────────────────────────────────────────────┐
- * │ id            │ string   auto-id                                         │
- * │ label         │ string   display name                                    │
- * │ parentId      │ string | null   null = desktop root                      │
- * │ createdAt     │ Timestamp                                                │
- * │ updatedAt     │ Timestamp                                                │
- * └───────────────┴──────────────────────────────────────────────────────────┘
+ *   id, label, parentId, createdAt, updatedAt
  *
  * users/{uid}/files/{fileId}
- * ┌───────────────┬──────────────────────────────────────────────────────────┐
- * │ id            │ string   auto-id                                         │
- * │ name          │ string   display name                                    │
- * │ type          │ "note" | "image" | "pdf" | "video" | "document"         │
- * │               │          | "upload" | "shortcut"                         │
- * │ folderId      │ string | null   null = desktop root                      │
- * │ content       │ string   (notes: markdown text; shortcut: target appId) │
- * │ mimeType      │ string | null   (for binary uploads)                     │
- * │ storageUrl    │ string | null   (Firebase Storage download URL)          │
- * │ storagePath   │ string | null   (Firebase Storage path, for deletion)    │
- * │ size          │ number | null   (bytes)                                  │
- * │ createdAt     │ Timestamp                                                │
- * │ updatedAt     │ Timestamp                                                │
- * └───────────────┴──────────────────────────────────────────────────────────┘
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * WHY SUB-COLLECTIONS, NOT A FLAT ARRAY ON usersettings/{uid}?
- * ─────────────────────────────────────────────────────────────────────────────
- * - Firestore documents are limited to 1 MB. A flat array in usersettings
- *   would hit that ceiling with enough files.
- * - Sub-collections support real-time listeners per folder without pulling
- *   the entire filesystem on every mount.
- * - Security rules can be scoped: users can only read/write their own subtree.
- *
- * ─────────────────────────────────────────────────────────────────────────────
- * EXTENSIONS in this version
- * ─────────────────────────────────────────────────────────────────────────────
- * - createFile now accepts `storagePath` and `size` fields (for uploads)
- * - deleteFile accepts an optional `storagePath` and deletes from Storage too
- * - new: deleteUploadedFile(uid, fileId, storagePath) — Storage + Firestore
- * - new: getFileById(uid, fileId) — single file fetch
+ *   id, name, type, folderId, content, mimeType,
+ *   storageUrl, storagePath (Cloudinary public_id), size,
+ *   createdAt, updatedAt
  */
 
 import {
@@ -56,6 +39,7 @@ import {
   addDoc,
   getDoc,
   getDocs,
+  setDoc,
   updateDoc,
   deleteDoc,
   query,
@@ -63,91 +47,83 @@ import {
   orderBy,
   serverTimestamp,
 } from "firebase/firestore"
-import {
-  ref as storageRef,
-  deleteObject,
-} from "firebase/storage"
-import { db, storage } from "../firebase"
+import { db } from "../firebase"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Collection references
 // ─────────────────────────────────────────────────────────────────────────────
 
-export const foldersRef = (uid) =>
-  collection(db, "users", uid, "folders")
+export const foldersRef = (uid) => collection(db, "users", uid, "folders")
+export const filesRef   = (uid) => collection(db, "users", uid, "files")
 
-export const filesRef = (uid) =>
-  collection(db, "users", uid, "files")
+// ─────────────────────────────────────────────────────────────────────────────
+// ROOT NOTE
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ROOT_NOTE_ID = "root-note"
+
+export async function bootstrapRootNote(uid) {
+  const noteDocRef = doc(db, "users", uid, "files", ROOT_NOTE_ID)
+  const noteSnap   = await getDoc(noteDocRef)
+
+  if (noteSnap.exists()) return noteSnap.data().content ?? ""
+
+  let migratedContent = ""
+  try {
+    const legacySnap = await getDoc(doc(db, "notes", uid))
+    if (legacySnap.exists()) migratedContent = legacySnap.data().content ?? ""
+  } catch (err) {
+    console.warn("CloudNova [bootstrapRootNote] legacy read skipped:", err.code)
+  }
+
+  await setDoc(noteDocRef, {
+    name: "Notes", type: "note", folderId: null,
+    content: migratedContent, mimeType: null,
+    storageUrl: null, storagePath: null, size: null,
+    createdAt: serverTimestamp(), updatedAt: serverTimestamp(),
+  }, { merge: true })
+
+  return migratedContent
+}
+
+export async function saveRootNote(uid, content) {
+  await updateDoc(doc(db, "users", uid, "files", ROOT_NOTE_ID), {
+    content,
+    updatedAt: serverTimestamp(),
+  })
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // FOLDERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Create a new folder.
- * @param {string}      uid
- * @param {string}      label       Display name
- * @param {string|null} parentId    null = desktop root
- * @returns {Promise<string>}       New folder's Firestore ID
- */
 export async function createFolder(uid, label, parentId = null) {
   const ref = await addDoc(foldersRef(uid), {
-    label,
-    parentId,
+    label, parentId,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })
   return ref.id
 }
 
-/**
- * Fetch all folders at a given parent level.
- * Pass parentId = null to list desktop-root folders.
- * @returns {Promise<Array<{ id, label, parentId, createdAt }>>}
- */
 export async function getFolders(uid, parentId = null) {
-  const q = query(
-    foldersRef(uid),
-    where("parentId", "==", parentId),
-    orderBy("createdAt", "asc")
-  )
+  const q    = query(foldersRef(uid), where("parentId", "==", parentId), orderBy("createdAt", "asc"))
   const snap = await getDocs(q)
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
 
-/**
- * Rename a folder.
- */
 export async function renameFolder(uid, folderId, newLabel) {
   await updateDoc(doc(foldersRef(uid), folderId), {
-    label:     newLabel,
-    updatedAt: serverTimestamp(),
+    label: newLabel, updatedAt: serverTimestamp(),
   })
 }
 
-/**
- * Delete a folder and all its direct files (including Storage objects).
- * For nested folders call this recursively from the UI layer.
- */
 export async function deleteFolder(uid, folderId) {
-  // Delete all files inside this folder (+ their Storage objects)
+  // Delete all files inside (Firestore only — Cloudinary assets are orphaned,
+  // acceptable for free tier; a Cloud Function would clean Cloudinary)
   const q    = query(filesRef(uid), where("folderId", "==", folderId))
   const snap = await getDocs(q)
-
-  const deletions = snap.docs.map(async (d) => {
-    const data = d.data()
-    if (data.storagePath) {
-      try {
-        await deleteObject(storageRef(storage, data.storagePath))
-      } catch (err) {
-        // Storage object may already be gone — log but don't block
-        console.warn("CloudNova [deleteFolder] storage delete:", err.code)
-      }
-    }
-    return deleteDoc(d.ref)
-  })
-
-  await Promise.all(deletions)
+  await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)))
   await deleteDoc(doc(foldersRef(uid), folderId))
 }
 
@@ -155,21 +131,6 @@ export async function deleteFolder(uid, folderId) {
 // FILES
 // ─────────────────────────────────────────────────────────────────────────────
 
-/**
- * Create a new file (note, upload, shortcut, etc.)
- *
- * @param {string} uid
- * @param {object} payload
- *   name        string
- *   type        "note" | "image" | "pdf" | "video" | "document" | "upload"
- *   folderId    string | null
- *   content     string               (for notes)
- *   mimeType    string | null
- *   storageUrl  string | null        (Firebase Storage download URL)
- *   storagePath string | null        (Firebase Storage path — for deletion)
- *   size        number | null        (bytes)
- * @returns {Promise<string>} New file's Firestore ID
- */
 export async function createFile(uid, {
   name,
   type        = "note",
@@ -177,103 +138,71 @@ export async function createFile(uid, {
   content     = "",
   mimeType    = null,
   storageUrl  = null,
-  storagePath = null,
+  storagePath = null,   // Cloudinary public_id for uploaded files
   size        = null,
 }) {
   const ref = await addDoc(filesRef(uid), {
-    name,
-    type,
-    folderId,
-    content,
-    mimeType,
-    storageUrl,
-    storagePath,
-    size,
+    name, type, folderId, content, mimeType,
+    storageUrl, storagePath, size,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   })
   return ref.id
 }
 
-/**
- * Fetch a single file by ID.
- */
 export async function getFileById(uid, fileId) {
   const snap = await getDoc(doc(filesRef(uid), fileId))
   if (!snap.exists()) return null
   return { id: snap.id, ...snap.data() }
 }
 
-/**
- * Fetch all files in a folder.
- * Pass folderId = null to list desktop-root files.
- * @returns {Promise<Array>}
- */
 export async function getFiles(uid, folderId = null) {
-  const q = query(
-    filesRef(uid),
-    where("folderId", "==", folderId),
-    orderBy("createdAt", "asc")
-  )
+  const q    = query(filesRef(uid), where("folderId", "==", folderId), orderBy("createdAt", "asc"))
   const snap = await getDocs(q)
   return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
 }
 
-/**
- * Update file content (e.g. autosave a note).
- */
 export async function updateFileContent(uid, fileId, content) {
   await updateDoc(doc(filesRef(uid), fileId), {
-    content,
-    updatedAt: serverTimestamp(),
+    content, updatedAt: serverTimestamp(),
   })
 }
 
-/**
- * Rename a file.
- */
 export async function renameFile(uid, fileId, newName) {
   await updateDoc(doc(filesRef(uid), fileId), {
-    name:      newName,
-    updatedAt: serverTimestamp(),
+    name: newName, updatedAt: serverTimestamp(),
   })
 }
 
 /**
- * Delete a file.
- * If the file has a storagePath, also deletes the Storage object.
- *
- * @param {string}      uid
- * @param {string}      fileId
- * @param {string|null} storagePath   Pass to also delete the Storage file.
+ * Delete a file from Firestore.
+ * storagePath (Cloudinary public_id) is accepted for API compatibility
+ * but Cloudinary deletion requires a server-side signed request.
+ * The Firestore record is always deleted immediately.
  */
 export async function deleteFile(uid, fileId, storagePath = null) {
+  // NOTE: Cloudinary deletion from the client is not possible without
+  // exposing your API secret. The asset remains on Cloudinary's CDN
+  // but is dereferenced from your app immediately.
+  // To fully delete from Cloudinary, add a Firebase Cloud Function that
+  // calls cloudinary.uploader.destroy(storagePath) server-side.
   if (storagePath) {
-    try {
-      await deleteObject(storageRef(storage, storagePath))
-    } catch (err) {
-      console.warn("CloudNova [deleteFile] storage delete:", err.code)
-    }
+    console.info(
+      "CloudNova [deleteFile] Cloudinary asset will be orphaned (client-side deletion not supported):",
+      storagePath
+    )
   }
   await deleteDoc(doc(filesRef(uid), fileId))
 }
 
-/**
- * Move a file to a different folder.
- */
 export async function moveFile(uid, fileId, newFolderId) {
   await updateDoc(doc(filesRef(uid), fileId), {
-    folderId:  newFolderId,
-    updatedAt: serverTimestamp(),
+    folderId: newFolderId, updatedAt: serverTimestamp(),
   })
 }
 
-/**
- * Move a folder to a different parent (for nested folders).
- */
 export async function moveFolder(uid, folderId, newParentId) {
   await updateDoc(doc(foldersRef(uid), folderId), {
-    parentId:  newParentId,
-    updatedAt: serverTimestamp(),
+    parentId: newParentId, updatedAt: serverTimestamp(),
   })
 }

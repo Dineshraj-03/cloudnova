@@ -1,92 +1,47 @@
-/**
- * useFolderContents.js — CloudNova
- *
- * Reusable hook that loads folders + files for a given folderId.
- * Extracted from FolderWindow so it can be used by any component
- * that needs to display filesystem contents.
- *
- * WHY a hook instead of inline useEffect in FolderWindow:
- * - Allows multiple windows to independently load the same folder
- *   without sharing state (each mount gets its own loading/error/data)
- * - Makes the load logic unit-testable outside of any component tree
- * - Keeps FolderWindow.jsx focused on UI concerns only
- *
- * Returns
- * ───────
- * {
- *   folders   : Array<FolderDoc>
- *   files     : Array<FileDoc>
- *   allItems  : Array<FolderDoc|FileDoc>   merged, folders first
- *   loading   : boolean
- *   error     : string | null
- *   reload    : () => void
- * }
- */
-
-import { useState, useEffect, useCallback, useRef } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { getFolders, getFiles } from "../filesystem"
 
 export function useFolderContents(uid, folderId) {
-  const [folders,  setFolders]  = useState([])
-  const [files,    setFiles]    = useState([])
+  const [allItems, setAllItems] = useState([])
   const [loading,  setLoading]  = useState(true)
-  const [error,    setError]    = useState(null)
+  const [tick,     setTick]     = useState(0)
 
-  // WHY: reloadKey is a counter that loadContents closes over.
-  // Calling reload() increments it, which triggers the useEffect
-  // without needing to pass reload as a dep of loadContents.
-  const [reloadKey, setReloadKey] = useState(0)
-
-  // WHY: cancelled flag prevents setState after unmount when the
-  // async getFolders/getFiles resolves on a component that's gone.
-  const cancelledRef = useRef(false)
+  const reload = useCallback(() => setTick((t) => t + 1), [])
 
   useEffect(() => {
-    cancelledRef.current = false
-    return () => { cancelledRef.current = true }
-  }, [])
-
-  useEffect(() => {
-    if (!uid || !folderId) {
+    if (!uid) {
+      setAllItems([])
       setLoading(false)
       return
     }
 
     let cancelled = false
     setLoading(true)
-    setError(null)
 
     Promise.all([
       getFolders(uid, folderId),
       getFiles(uid, folderId),
     ])
-      .then(([f, fi]) => {
-        if (cancelled || cancelledRef.current) return
-        setFolders(f)
-        setFiles(fi)
-        setError(null)
+      .then(([folders, files]) => {
+        if (cancelled) return
+        const folderItems = folders.map((f) => ({ ...f, itemType: "folder" }))
+        const fileItems   = files.map((f)   => ({ ...f, itemType: f.type  }))
+        const ms = (ts) => ts?.toMillis?.() ?? 0
+        folderItems.sort((a, b) => ms(a.createdAt) - ms(b.createdAt))
+        fileItems.sort((a, b)   => ms(a.createdAt) - ms(b.createdAt))
+        setAllItems([...folderItems, ...fileItems])
+        setLoading(false)
       })
       .catch((err) => {
-        if (cancelled || cancelledRef.current) return
+        if (cancelled) return
         console.error("CloudNova [useFolderContents]:", err)
-        setError(err.message ?? "Failed to load folder contents")
-      })
-      .finally(() => {
-        if (cancelled || cancelledRef.current) return
         setLoading(false)
       })
 
     return () => { cancelled = true }
-  // reloadKey intentionally included so reload() triggers a re-fetch
-  }, [uid, folderId, reloadKey]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [uid, folderId, tick]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  const reload = useCallback(() => setReloadKey((k) => k + 1), [])
-
-  // Merge folders + files into one list, folders always first
-  const allItems = [
-    ...folders.map((f) => ({ ...f, itemType: "folder" })),
-    ...files.map((f)   => ({ ...f, itemType: f.type   })),
-  ]
-
-  return { folders, files, allItems, loading, error, reload }
+  return { allItems, loading, reload }
 }
+
+export default useFolderContents

@@ -1,71 +1,97 @@
-import { useEffect, useState } from "react"
+/**
+ * Notes.jsx — CloudNova
+ *
+ * The root/global Notes app.
+ *
+ * Persistence model (unified filesystem):
+ * ────────────────────────────────────────
+ * All note data lives at:
+ *   users/{uid}/files/root-note        ← deterministic doc ID
+ *
+ * On mount  → bootstrapRootNote(uid)
+ *               • If the filesystem doc already exists → load content from it.
+ *               • Else if legacy notes/{uid} exists   → migrate, write once,
+ *                 return content. (old data is never deleted — safe rollback)
+ *               • Else                                → create empty note.
+ *
+ * On change → debounced saveRootNote(uid, content)
+ *               • updateDoc on the same deterministic path.
+ *               • No setDoc / no re-creation — always an update.
+ *
+ * This eliminates the previous dual-system bug where:
+ *   - saves went to  notes/{uid}           (top-level legacy collection)
+ *   - loads expected users/{uid}/files/*   (filesystem collection)
+ *   … and the two paths never met.
+ */
 
+import { useEffect, useRef, useState } from "react"
 import Window from "./Window"
-
-import { auth, db } from "../firebase"
-
-import {
-  doc,
-  getDoc,
-  setDoc,
-} from "firebase/firestore"
+import { auth } from "../firebase"
+import { bootstrapRootNote, saveRootNote } from "./filesystem"
 
 function Notes(props) {
+  const [note,   setNote]   = useState("")
+  const [ready,  setReady]  = useState(false)   // prevents saving before load
 
-  const [note, setNote] = useState("")
+  // useRef for the debounce timer so it never triggers a re-render
+  const debounceRef = useRef(null)
 
-  const [saveTimeout, setSaveTimeout] = useState(null)
-
+  // ── Load (or bootstrap) on mount ──────────────────────────────────────────
   useEffect(() => {
+    let cancelled = false
 
-    const loadNote = async () => {
-
+    const load = async () => {
       const user = auth.currentUser
-
       if (!user) return
 
-      const docRef = doc(db, "notes", user.uid)
-
-      const docSnap = await getDoc(docRef)
-
-      if (docSnap.exists()) {
-        setNote(docSnap.data().content)
+      try {
+        const content = await bootstrapRootNote(user.uid)
+        if (!cancelled) {
+          setNote(content)
+          setReady(true)
+        }
+      } catch (err) {
+        console.error("CloudNova [Notes] load error:", err)
+        if (!cancelled) setReady(true)   // still allow editing on error
       }
-
     }
 
-    loadNote()
+    load()
 
+    return () => {
+      cancelled = true
+      // Flush any pending save immediately on unmount so nothing is lost
+      if (debounceRef.current) {
+        clearTimeout(debounceRef.current)
+        debounceRef.current = null
+      }
+    }
   }, [])
 
-  const saveNote = async (value) => {
-
+  // ── Debounced autosave ────────────────────────────────────────────────────
+  const handleChange = (e) => {
+    const value = e.target.value
     setNote(value)
 
-    if (saveTimeout) {
-      clearTimeout(saveTimeout)
-    }
+    // Don't save if content hasn't loaded yet (avoids overwriting with "")
+    if (!ready) return
 
-    const timeout = setTimeout(async () => {
+    if (debounceRef.current) clearTimeout(debounceRef.current)
 
+    debounceRef.current = setTimeout(async () => {
       const user = auth.currentUser
-
       if (!user) return
 
-      await setDoc(
-        doc(db, "notes", user.uid),
-        {
-          content: value,
-        }
-      )
-
-      console.log("Note saved.")
-
+      try {
+        await saveRootNote(user.uid, value)
+        console.info("CloudNova [Notes] autosaved.")
+      } catch (err) {
+        console.error("CloudNova [Notes] save error:", err)
+      }
     }, 800)
-
-    setSaveTimeout(timeout)
   }
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <Window
       title="Notes"
@@ -73,23 +99,16 @@ function Notes(props) {
       minimizeWindow={props.minimizeNotes}
       isActive={props.isActive}
       focusWindow={props.focusWindow}
-      defaultPosition={{
-        x: 160,
-        y: 80,
-      }}
+      defaultPosition={{ x: 160, y: 80 }}
       width="40vw"
       height="50vh"
     >
-
       <textarea
         value={note}
-        onChange={(e) =>
-          saveNote(e.target.value)
-        }
+        onChange={handleChange}
         placeholder="Write something..."
         className="w-full h-full bg-zinc-800 text-white p-4 outline-none resize-none"
       />
-
     </Window>
   )
 }
